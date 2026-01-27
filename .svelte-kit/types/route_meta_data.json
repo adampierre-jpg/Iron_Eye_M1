@@ -1,0 +1,15 @@
+{
+	"/": [
+		"src/routes/+layout.ts",
+		"src/routes/+layout.ts"
+	],
+	"/live": [
+		"src/routes/+layout.ts"
+	],
+	"/summary": [
+		"src/routes/+layout.ts"
+	],
+	"/upload": [
+		"src/routes/+layout.ts"
+	]
+}
