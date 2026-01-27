@@ -1,0 +1,576 @@
+/* ============================================================
+   Iron Eye — Global Styles
+   Palette: Oxblood / Copper / Black
+   ============================================================ */
+
+/* ============================================================
+   CSS Custom Properties
+   ============================================================ */
+
+:root {
+  /* Primary Colors */
+  --color-black: #0a0a0a;
+  --color-black-light: #141414;
+  --color-black-lighter: #1f1f1f;
+  
+  --color-copper: #b87333;
+  --color-copper-bright: #d4894a;
+  --color-copper-dim: #8a5627;
+  
+  --color-oxblood: #722f37;
+  --color-oxblood-bright: #8b3a44;
+  --color-oxblood-dim: #5a252c;
+  
+  /* Neutral Colors */
+  --color-white: #f5f5f5;
+  --color-muted: #666666;
+  --color-muted-dim: #444444;
+  
+  /* Semantic Colors */
+  --color-active: var(--color-copper);
+  --color-warning: var(--color-oxblood);
+  --color-success: var(--color-copper-bright);
+  --color-error: var(--color-oxblood-bright);
+  
+  /* Typography */
+  --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-bold: 600;
+  
+  /* Font Sizes */
+  --font-size-xs: 0.75rem;    /* 12px */
+  --font-size-sm: 0.875rem;   /* 14px */
+  --font-size-base: 1rem;     /* 16px */
+  --font-size-lg: 1.25rem;    /* 20px */
+  --font-size-xl: 1.5rem;     /* 24px */
+  --font-size-2xl: 2rem;      /* 32px */
+  --font-size-3xl: 2.5rem;    /* 40px */
+  
+  /* Spacing */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-8: 3rem;
+  
+  /* Border Radius */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-full: 9999px;
+  
+  /* Transitions */
+  --transition-fast: 100ms ease;
+  --transition-normal: 200ms ease;
+  --transition-slow: 300ms ease;
+  
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.5);
+  
+  /* Z-index layers */
+  --z-base: 0;
+  --z-overlay: 100;
+  --z-modal: 200;
+  --z-alert: 300;
+}
+
+/* ============================================================
+   Reset & Base Styles
+   ============================================================ */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: var(--font-family);
+  font-weight: var(--font-weight-normal);
+  font-size: var(--font-size-base);
+  line-height: 1.5;
+  color: var(--color-white);
+  background-color: var(--color-black);
+  min-height: 100vh;
+  min-height: 100dvh;
+  overflow-x: hidden;
+}
+
+/* ============================================================
+   Typography
+   ============================================================ */
+
+h1, h2, h3, h4, h5, h6 {
+  font-weight: var(--font-weight-bold);
+  line-height: 1.2;
+}
+
+h1 { font-size: var(--font-size-2xl); }
+h2 { font-size: var(--font-size-xl); }
+h3 { font-size: var(--font-size-lg); }
+
+p {
+  margin-bottom: var(--space-4);
+}
+
+a {
+  color: var(--color-copper);
+  text-decoration: none;
+  transition: color var(--transition-fast);
+}
+
+a:hover {
+  color: var(--color-copper-bright);
+}
+
+/* ============================================================
+   Form Elements
+   ============================================================ */
+
+button {
+  font-family: inherit;
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  border: none;
+  outline: none;
+  transition: all var(--transition-normal);
+}
+
+input, select, textarea {
+  font-family: inherit;
+  font-size: var(--font-size-base);
+  color: var(--color-white);
+  background-color: var(--color-black-light);
+  border: 1px solid var(--color-muted-dim);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  outline: none;
+  transition: border-color var(--transition-fast);
+}
+
+input:focus, select:focus, textarea:focus {
+  border-color: var(--color-copper);
+}
+
+input::placeholder {
+  color: var(--color-muted);
+}
+
+/* ============================================================
+   Utility Classes
+   ============================================================ */
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.text-copper { color: var(--color-copper); }
+.text-oxblood { color: var(--color-oxblood); }
+.text-muted { color: var(--color-muted); }
+.text-white { color: var(--color-white); }
+
+.bg-black { background-color: var(--color-black); }
+.bg-copper { background-color: var(--color-copper); }
+.bg-oxblood { background-color: var(--color-oxblood); }
+
+/* ============================================================
+   Button Variants
+   ============================================================ */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-5);
+  border-radius: var(--radius-md);
+  font-weight: var(--font-weight-medium);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.btn-primary {
+  background-color: var(--color-copper);
+  color: var(--color-black);
+}
+
+.btn-primary:hover {
+  background-color: var(--color-copper-bright);
+}
+
+.btn-primary:active {
+  background-color: var(--color-copper-dim);
+}
+
+.btn-secondary {
+  background-color: var(--color-black-lighter);
+  color: var(--color-white);
+  border: 1px solid var(--color-muted-dim);
+}
+
+.btn-secondary:hover {
+  border-color: var(--color-copper);
+  color: var(--color-copper);
+}
+
+.btn-warning {
+  background-color: var(--color-oxblood);
+  color: var(--color-white);
+}
+
+.btn-warning:hover {
+  background-color: var(--color-oxblood-bright);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--color-copper);
+}
+
+.btn-ghost:hover {
+  background-color: var(--color-black-lighter);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-lg {
+  padding: var(--space-4) var(--space-6);
+  font-size: var(--font-size-lg);
+}
+
+.btn-sm {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--font-size-sm);
+}
+
+/* ============================================================
+   Layout Utilities
+   ============================================================ */
+
+.container {
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 var(--space-4);
+}
+
+.flex {
+  display: flex;
+}
+
+.flex-col {
+  flex-direction: column;
+}
+
+.items-center {
+  align-items: center;
+}
+
+.justify-center {
+  justify-content: center;
+}
+
+.justify-between {
+  justify-content: space-between;
+}
+
+.gap-2 { gap: var(--space-2); }
+.gap-3 { gap: var(--space-3); }
+.gap-4 { gap: var(--space-4); }
+.gap-5 { gap: var(--space-5); }
+
+/* ============================================================
+   Full-screen Video Container (Live Mode)
+   ============================================================ */
+
+.video-fullscreen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  background-color: var(--color-black);
+  overflow: hidden;
+}
+
+.video-fullscreen video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* ============================================================
+   Video Container (Upload Mode)
+   ============================================================ */
+
+.video-container {
+  position: relative;
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+  background-color: var(--color-black-light);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.video-container video {
+  width: 100%;
+  display: block;
+}
+
+/* ============================================================
+   Overlay System
+   ============================================================ */
+
+.overlay-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  z-index: var(--z-overlay);
+}
+
+.overlay-layer > * {
+  pointer-events: auto;
+}
+
+/* ============================================================
+   Status Indicators
+   ============================================================ */
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  display: inline-block;
+}
+
+.status-dot.active { background-color: var(--color-copper); }
+.status-dot.warning { background-color: var(--color-oxblood); }
+.status-dot.inactive { background-color: var(--color-muted); }
+
+/* Pulsing animation for active state */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.status-dot.pulse {
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+/* ============================================================
+   Alert Banner
+   ============================================================ */
+
+.alert-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: var(--space-3) var(--space-4);
+  background-color: var(--color-oxblood);
+  color: var(--color-copper-bright);
+  text-align: center;
+  font-weight: var(--font-weight-medium);
+  z-index: var(--z-alert);
+  transform: translateY(-100%);
+  transition: transform var(--transition-normal);
+}
+
+.alert-banner.visible {
+  transform: translateY(0);
+}
+
+/* ============================================================
+   Card Component
+   ============================================================ */
+
+.card {
+  background-color: var(--color-black-light);
+  border: 1px solid var(--color-black-lighter);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+}
+
+.card-header {
+  margin-bottom: var(--space-4);
+}
+
+.card-title {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-white);
+}
+
+/* ============================================================
+   Loading Spinner
+   ============================================================ */
+
+.spinner {
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--color-muted-dim);
+  border-top-color: var(--color-copper);
+  border-radius: var(--radius-full);
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ============================================================
+   Mobile-first Responsive
+   ============================================================ */
+
+@media (max-width: 640px) {
+  :root {
+    --font-size-base: 0.9375rem;
+    --font-size-lg: 1.125rem;
+    --font-size-xl: 1.25rem;
+    --font-size-2xl: 1.5rem;
+  }
+  
+  .container {
+    padding: 0 var(--space-3);
+  }
+  
+  .btn-lg {
+    width: 100%;
+  }
+}
+
+/* ============================================================
+   Safe Areas (for mobile notches/home indicators)
+   ============================================================ */
+
+@supports (padding-top: env(safe-area-inset-top)) {
+  .safe-top {
+    padding-top: env(safe-area-inset-top);
+  }
+  
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  
+  .safe-all {
+    padding-top: env(safe-area-inset-top);
+    padding-right: env(safe-area-inset-right);
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+  }
+}
+
+/* ============================================================
+   Drag & Drop Zone
+   ============================================================ */
+
+.drop-zone {
+  border: 2px dashed var(--color-muted-dim);
+  border-radius: var(--radius-lg);
+  padding: var(--space-8);
+  text-align: center;
+  transition: all var(--transition-normal);
+  cursor: pointer;
+}
+
+.drop-zone:hover,
+.drop-zone.dragover {
+  border-color: var(--color-copper);
+  background-color: var(--color-black-light);
+}
+
+.drop-zone.dragover {
+  border-style: solid;
+}
+
+/* ============================================================
+   Toggle Switch
+   ============================================================ */
+
+.toggle {
+  position: relative;
+  width: 48px;
+  height: 28px;
+  background-color: var(--color-muted-dim);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+
+.toggle.active {
+  background-color: var(--color-copper);
+}
+
+.toggle::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 24px;
+  height: 24px;
+  background-color: var(--color-white);
+  border-radius: var(--radius-full);
+  transition: transform var(--transition-fast);
+}
+
+.toggle.active::after {
+  transform: translateX(20px);
+}
+
+/* ============================================================
+   Debug HUD (hidden by default)
+   ============================================================ */
+
+.debug-hud {
+  position: fixed;
+  bottom: var(--space-4);
+  right: var(--space-4);
+  background-color: rgba(0, 0, 0, 0.85);
+  border: 1px solid var(--color-muted-dim);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  font-family: monospace;
+  font-size: var(--font-size-xs);
+  color: var(--color-copper);
+  z-index: var(--z-modal);
+  min-width: 200px;
+}
+
+.debug-hud dt {
+  color: var(--color-muted);
+  float: left;
+  clear: left;
+}
+
+.debug-hud dd {
+  text-align: right;
+  margin-left: 0;
+}
