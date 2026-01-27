@@ -1,37 +1,50 @@
- <!--
-  Upload Screen (Screen D)
-  Desktop-oriented video upload and playback
-  
-  Features:
-  - Drag-and-drop upload zone
-  - Centered video player with native controls
-  - Calibration panel below video
-  - Same overlays as Live mode
--->
-
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { goto } from '$app/navigation';
   import { browser } from '$app/environment';
-  import { VideoOverlay, CalibrationPanel } from '$lib/components';
+  import { CalibrationPanel } from '$lib/components';
   import { 
     getVideoIngestService, 
     destroyVideoIngestService 
   } from '$lib/services/videoIngest';
-  import { 
-    calibration, 
-    calibrationStatus, 
-    overlay, 
-    ui, 
-    videoIngest 
+  import {
+    calibration,
+    calibrationStatus,
+    overlay,
+    ui,
+    videoIngest,
+    trackingStatus,
+    sideLockStatus
   } from '$lib/stores';
-  import type { FrameData } from '$lib/types';
+  import type { FrameData, SnatchPhase } from '$lib/types';
+
+  // Phase display names
+  const phaseLabels: Record<SnatchPhase, string> = {
+    STANDING: 'Standing',
+    HANDONBELL: 'Ready',
+    HIKE: 'Hike',
+    PULL: 'Pull',
+    FLOAT: 'Float',
+    LOCKOUT: 'Lockout',
+    DROP: 'Drop',
+    CATCH: 'Catch',
+    PARK: 'Park'
+  };
+
+  // Format velocity for display
+  function formatVelocity(mps: number): string {
+    if (mps <= 0) return '—';
+    return mps.toFixed(2);
+  }
   
   // State
   // svelte-ignore non_reactive_update
   let videoElement: HTMLVideoElement;
   // svelte-ignore non_reactive_update
+  let canvasElement: HTMLCanvasElement; // [FIX] Added canvas ref
+  // svelte-ignore non_reactive_update
   let fileInput: HTMLInputElement;
+  
   let videoFile = $state<File | null>(null);
   let videoUrl = $state<string | null>(null);
   let isDragOver = $state(false);
@@ -49,30 +62,25 @@
       alert('Please select a video file');
       return;
     }
-    
-    // Revoke previous URL if exists
     if (videoUrl) {
       URL.revokeObjectURL(videoUrl);
     }
-    
     videoFile = file;
     videoUrl = URL.createObjectURL(file);
+    console.log('Selected file:', file);
+    console.log('Generated videoUrl:', videoUrl);
     isVideoLoaded = false;
     isProcessing = false;
     
-    // Reset overlay
     overlay.reset();
   }
   
   // Handle video loaded
   async function handleVideoLoaded() {
     if (!videoElement || !videoFile) return;
-    
     isVideoLoaded = true;
     
-    // Initialize video ingest service
     videoService = getVideoIngestService();
-    
     const success = await videoService.initializeUploadVideo(
       videoElement,
       videoFile,
@@ -80,6 +88,12 @@
     );
     
     if (success) {
+      try {
+        await videoElement.play();
+      } catch (e) {
+        console.warn('Auto-play failed', e);
+        videoElement.controls = true; 
+      }
       console.log('[Upload] Video ready for processing');
     }
   }
@@ -88,7 +102,23 @@
   function handleFrame(frame: FrameData) {
     overlay.updateFps($videoIngest.actualFps);
     
-    // TODO: Milestone 2+ will add pose detection and phase classification
+    // [FIX] Draw video frame to canvas
+    if (canvasElement && videoElement) {
+      const ctx = canvasElement.getContext('2d');
+      if (ctx) {
+        // Sync canvas size if needed
+        if (canvasElement.width !== videoElement.videoWidth || 
+            canvasElement.height !== videoElement.videoHeight) {
+          canvasElement.width = videoElement.videoWidth;
+          canvasElement.height = videoElement.videoHeight;
+        }
+
+        // Draw the raw video frame
+        ctx.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
+
+        // TODO: Milestone 2+ Draw skeletons/overlays here using ctx
+      }
+    }
   }
   
   // Handle calibration confirm
@@ -99,7 +129,6 @@
   // Start processing
   function handleStartProcessing() {
     if (!videoService || !isCalibrated) return;
-    
     isProcessing = true;
     videoService.startFrameLoop();
     videoElement?.play();
@@ -137,7 +166,6 @@
     }
   }
   
-  // Handle file input change
   function handleInputChange(e: Event) {
     const target = e.target as HTMLInputElement;
     const files = target.files;
@@ -146,7 +174,6 @@
     }
   }
   
-  // Cleanup
   onDestroy(() => {
     if (videoUrl) {
       URL.revokeObjectURL(videoUrl);
@@ -161,7 +188,6 @@
 </svelte:head>
 
 <main class="upload-screen">
-  <!-- Header -->
   <header class="upload-header">
     <button class="back-btn" onclick={() => goto('/')}>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -176,10 +202,8 @@
     <div class="header-spacer"></div>
   </header>
   
-  <!-- Main content -->
   <div class="upload-content">
     {#if !videoUrl}
-      <!-- Upload zone -->
       <div 
         class="drop-zone"
         class:dragover={isDragOver}
@@ -213,27 +237,28 @@
         />
       </div>
     {:else}
-      <!-- Video player section -->
       <div class="video-section">
         <div class="video-container">
-          <!-- Video element -->
-          <!-- svelte-ignore a11y_media_has_caption -->
           <video 
             bind:this={videoElement}
             src={videoUrl}
             playsinline
             loop
+            muted
+            controls={!isProcessing}
             onloadedmetadata={handleVideoLoaded}
+            onerror={() => { console.error('Video failed to load', videoUrl, videoFile); }}
             class="upload-video"
           ></video>
+
+          <canvas
+            bind:this={canvasElement}
+            class="upload-canvas"
+            class:hidden={!isProcessing}
+          ></canvas>
           
-          <!-- Overlays (when processing) -->
-          {#if isProcessing}
-            <VideoOverlay showFps={true} debugMode={showDebug} />
-          {/if}
         </div>
         
-        <!-- Video info -->
         {#if isVideoLoaded}
           <div class="video-info">
             <span class="video-filename">{videoFile?.name}</span>
@@ -243,10 +268,47 @@
           </div>
         {/if}
       </div>
-      
-      <!-- Control panel -->
+
+      {#if isProcessing}
+        <div class="stats-panel">
+          <div class="stat-item">
+            <span class="stat-label">Phase</span>
+            <span class="stat-value">{phaseLabels[$overlay.phase]}</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">Side</span>
+            <span class="stat-value">{$sideLockStatus.label}</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">Reps</span>
+            <span class="stat-value">{$overlay.repCount}</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">Velocity</span>
+            <span class="stat-value">{formatVelocity($overlay.currentVelocity)} m/s</span>
+          </div>
+          {#if $overlay.peakVelocity > 0}
+            <div class="stat-item">
+              <span class="stat-label">Peak</span>
+              <span class="stat-value highlight">{formatVelocity($overlay.peakVelocity)} m/s</span>
+            </div>
+          {/if}
+          {#if showDebug}
+            <div class="stat-item">
+              <span class="stat-label">FPS</span>
+              <span class="stat-value">{$overlay.fps}</span>
+            </div>
+          {/if}
+        </div>
+      {/if}
+
+      {#if $overlay.alert}
+        <div class="alert-banner-inline">
+          {$overlay.alert.message}
+        </div>
+      {/if}
+
       <div class="control-panel">
-        <!-- Calibration -->
         {#if !isCalibrated}
           <div class="panel-section">
             <CalibrationPanel compact={true} onConfirm={handleCalibrationConfirm} />
@@ -263,7 +325,6 @@
           </div>
         {/if}
         
-        <!-- Processing controls -->
         <div class="panel-section">
           {#if !isProcessing}
             <button 
@@ -291,7 +352,6 @@
           </button>
         </div>
         
-        <!-- Debug toggle -->
         <div class="panel-section debug-section">
           <label class="debug-label">
             <input 
@@ -354,7 +414,7 @@
   }
   
   .header-spacer {
-    width: 80px; /* Match back button width for centering */
+    width: 80px;
   }
   
   /* Content */
@@ -405,18 +465,44 @@
     margin-bottom: var(--space-5);
   }
   
+  /* [FIX] Updated container for stacking */
   .video-container {
-    position: relative;
+    position: relative; /* Critical for absolute children */
     background-color: var(--color-black-light);
     border-radius: var(--radius-lg);
     overflow: hidden;
     border: 1px solid var(--color-black-lighter);
+    min-height: 240px;
+    aspect-ratio: 16 / 9;
   }
   
+  /* [FIX] Video absolute positioning */
   .upload-video {
+    position: absolute;
+    top: 0;
+    left: 0;
     width: 100%;
-    max-height: 60vh;
-    display: block;
+    height: 100%;
+    object-fit: contain;
+    background: black;
+    z-index: 1;
+  }
+
+  /* [FIX] Canvas absolute positioning */
+  .upload-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    z-index: 2;
+    pointer-events: none; /* Let clicks pass through to video controls */
+  }
+
+  /* Helper to hide canvas when not processing */
+  .hidden {
+    display: none;
   }
   
   .video-info {
@@ -471,7 +557,6 @@
     gap: var(--space-3);
   }
   
-  /* Processing controls buttons in row */
   .panel-section:has(.btn-primary) {
     flex-direction: row;
     gap: var(--space-3);
@@ -499,7 +584,52 @@
     width: 16px;
     height: 16px;
   }
-  
+
+  /* Stats HUD Panel */
+  .stats-panel {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-4);
+    padding: var(--space-4);
+    background-color: var(--color-black-light);
+    border: 1px solid var(--color-black-lighter);
+    border-radius: var(--radius-lg);
+    margin-bottom: var(--space-4);
+  }
+
+  .stat-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 80px;
+  }
+
+  .stat-label {
+    font-size: var(--font-size-xs);
+    color: var(--color-muted);
+    text-transform: uppercase;
+  }
+
+  .stat-value {
+    font-size: var(--font-size-lg);
+    font-weight: var(--font-weight-bold);
+    color: var(--color-white);
+  }
+
+  .stat-value.highlight {
+    color: var(--color-copper-bright);
+  }
+
+  .alert-banner-inline {
+    padding: var(--space-3) var(--space-4);
+    background-color: var(--color-oxblood);
+    color: var(--color-white);
+    border-radius: var(--radius-lg);
+    margin-bottom: var(--space-4);
+    text-align: center;
+    font-weight: var(--font-weight-medium);
+  }
+
   /* Responsive */
   @media (max-width: 768px) {
     .upload-content {
