@@ -196,38 +196,10 @@ function createUIStore() {
 
 export const ui = createUIStore();
 
-// ============================================================
-// Video Ingest State Store
-// ============================================================
+import { videoIngest } from './videoIngest.svelte';
+import { telemetry } from './telemetry.svelte';
 
-const defaultVideoIngest: VideoIngestState = {
-  isActive: false,
-  actualFps: 0,
-  frameCount: 0,
-  droppedFrames: 0,
-  lastFrameTimestamp: 0
-};
-
-function createVideoIngestStore() {
-  const { subscribe, set, update } = writable<VideoIngestState>(defaultVideoIngest);
-
-  return {
-    subscribe,
-    setActive: (active: boolean) => update(v => ({ ...v, isActive: active })),
-    updateFps: (fps: number) => update(v => ({ ...v, actualFps: fps })),
-    incrementFrame: (timestamp: number) => {
-      update(v => ({
-        ...v,
-        frameCount: v.frameCount + 1,
-        lastFrameTimestamp: timestamp
-      }));
-    },
-    incrementDropped: () => update(v => ({ ...v, droppedFrames: v.droppedFrames + 1 })),
-    reset: () => set(defaultVideoIngest)
-  };
-}
-
-export const videoIngest = createVideoIngestStore();
+export { videoIngest, telemetry };
 
 // ============================================================
 // Session Data Store (for summary/export)

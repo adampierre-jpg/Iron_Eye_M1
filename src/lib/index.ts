@@ -13,7 +13,6 @@ export * from './components';
 
 // Re-export services
 export { 
-  VideoIngestService, 
   getVideoIngestService, 
   destroyVideoIngestService 
 } from './services/videoIngest';

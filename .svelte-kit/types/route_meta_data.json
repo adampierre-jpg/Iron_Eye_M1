@@ -10,6 +10,7 @@
 		"src/routes/+layout.ts"
 	],
 	"/upload": [
+		"src/routes/upload/+page.ts",
 		"src/routes/+layout.ts"
 	]
 }

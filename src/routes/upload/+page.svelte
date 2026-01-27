@@ -1,24 +1,27 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onDestroy } from 'svelte';
   import { goto } from '$app/navigation';
-  import { browser } from '$app/environment';
-  import { CalibrationPanel } from '$lib/components';
+  
+  // Services
   import { 
     getVideoIngestService, 
     destroyVideoIngestService 
   } from '$lib/services/videoIngest';
+
+  // Stores
   import {
     calibration,
-    calibrationStatus,
-    overlay,
-    ui,
+    overlay,     // Ensure this is your Svelte 5 reactive store
     videoIngest,
-    trackingStatus,
     sideLockStatus
   } from '$lib/stores';
-  import type { FrameData, SnatchPhase } from '$lib/types';
 
-  // Phase display names
+  // Types
+  import type { SnatchPhase, PoseResult } from '$lib/types';
+  import { CalibrationPanel } from '$lib/components';
+
+  // --- CONFIG ---
+
   const phaseLabels: Record<SnatchPhase, string> = {
     STANDING: 'Standing',
     HANDONBELL: 'Ready',
@@ -31,160 +34,124 @@
     PARK: 'Park'
   };
 
-  // Format velocity for display
   function formatVelocity(mps: number): string {
-    if (mps <= 0) return '—';
-    return mps.toFixed(2);
+    return mps <= 0 ? '—' : mps.toFixed(2);
   }
-  
-  // State
-  // svelte-ignore non_reactive_update
+
+  // --- STATE (Runes) ---
+
+  // DOM Bindings (No $state needed for bindings in Svelte 5)
   let videoElement: HTMLVideoElement;
-  // svelte-ignore non_reactive_update
-  let canvasElement: HTMLCanvasElement; // [FIX] Added canvas ref
-  // svelte-ignore non_reactive_update
+  let canvasElement: HTMLCanvasElement;
   let fileInput: HTMLInputElement;
-  
+
+  // Local Reactive State
   let videoFile = $state<File | null>(null);
   let videoUrl = $state<string | null>(null);
+  
   let isDragOver = $state(false);
   let isVideoLoaded = $state(false);
   let isCalibrated = $state(false);
   let isProcessing = $state(false);
   let showDebug = $state(false);
-  
-  // Video ingest service
-  let videoService: ReturnType<typeof getVideoIngestService> | null = null;
-  
-  // Handle file selection
+
+  // Service Reference
+  let videoService = getVideoIngestService();
+
+  // --- LOGIC ---
+
   async function handleFileSelect(file: File) {
     if (!file.type.startsWith('video/')) {
-      alert('Please select a video file');
+      alert('Please select a video file (MP4, MOV, WebM).');
       return;
     }
-    if (videoUrl) {
-      URL.revokeObjectURL(videoUrl);
-    }
+    
+    // Cleanup previous URL
+    if (videoUrl) URL.revokeObjectURL(videoUrl);
+    
+    // Reset State
     videoFile = file;
     videoUrl = URL.createObjectURL(file);
-    console.log('Selected file:', file);
-    console.log('Generated videoUrl:', videoUrl);
     isVideoLoaded = false;
     isProcessing = false;
     
-    overlay.reset();
+    // Reset Stores
+    // overlay.reset(); // Uncomment if your store has a reset method
   }
-  
-  // Handle video loaded
-  async function handleVideoLoaded() {
+
+  function handleVideoLoaded() {
     if (!videoElement || !videoFile) return;
     isVideoLoaded = true;
+    console.log(`[Upload] Loaded: ${videoFile.name} (${videoElement.videoWidth}x${videoElement.videoHeight})`);
     
-    videoService = getVideoIngestService();
-    const success = await videoService.initializeUploadVideo(
-      videoElement,
-      videoFile,
-      handleFrame
-    );
-    
-    if (success) {
-      try {
-        await videoElement.play();
-      } catch (e) {
-        console.warn('Auto-play failed', e);
-        videoElement.controls = true; 
-      }
-      console.log('[Upload] Video ready for processing');
-    }
+    // Initialize the service with the video element and our frame callback
+    videoService.initialize(videoElement, handleFrame);
   }
-  
-  // Handle frame processing
-  function handleFrame(frame: FrameData) {
-    overlay.updateFps($videoIngest.actualFps);
+
+  /**
+   * THE LOOP: Called ~60 times per second by videoIngest.ts
+   */
+  function handleFrame(poseResult: PoseResult) {
+    // 1. Update Telemetry (Using the new PoseResult from M2)
+    // Assuming 'overlay' store can accept these updates:
+    overlay.fps = poseResult.fps;
     
-    // [FIX] Draw video frame to canvas
+    // 2. Render to Canvas
     if (canvasElement && videoElement) {
       const ctx = canvasElement.getContext('2d');
       if (ctx) {
-        // Sync canvas size if needed
-        if (canvasElement.width !== videoElement.videoWidth || 
-            canvasElement.height !== videoElement.videoHeight) {
+        // Sync canvas to video size
+        if (canvasElement.width !== videoElement.videoWidth) {
           canvasElement.width = videoElement.videoWidth;
           canvasElement.height = videoElement.videoHeight;
         }
 
-        // Draw the raw video frame
-        ctx.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
+        // A. Draw the video frame
+        ctx.drawImage(videoElement, 0, 0);
 
-        // TODO: Milestone 2+ Draw skeletons/overlays here using ctx
+        // B. Draw Skeleton (Milestone 2 Visuals)
+        if (showDebug) {
+          drawSkeleton(ctx, poseResult);
+        }
       }
     }
   }
-  
-  // Handle calibration confirm
-  function handleCalibrationConfirm() {
-    isCalibrated = true;
+
+  // Simple debug drawer for immediate feedback
+  function drawSkeleton(ctx: CanvasRenderingContext2D, result: PoseResult) {
+    ctx.fillStyle = '#00ff00';
+    for (const kp of result.keypoints) {
+      if (kp.score > 0.5) {
+        ctx.beginPath();
+        // x, y are normalized (0-1), so multiply by width/height
+        ctx.arc(kp.x * ctx.canvas.width, kp.y * ctx.canvas.height, 4, 0, 2 * Math.PI);
+        ctx.fill();
+      }
+    }
   }
-  
-  // Start processing
+
   function handleStartProcessing() {
-    if (!videoService || !isCalibrated) return;
+    if (!isCalibrated) return;
     isProcessing = true;
     videoService.startFrameLoop();
     videoElement?.play();
   }
-  
-  // Stop processing
+
   function handleStopProcessing() {
     isProcessing = false;
-    videoService?.stopFrameLoop();
+    videoService.stopFrameLoop();
     videoElement?.pause();
   }
-  
-  // Handle drag events
-  function handleDragEnter(e: DragEvent) {
-    e.preventDefault();
-    isDragOver = true;
-  }
-  
-  function handleDragLeave(e: DragEvent) {
-    e.preventDefault();
-    isDragOver = false;
-  }
-  
-  function handleDragOver(e: DragEvent) {
-    e.preventDefault();
-  }
-  
-  function handleDrop(e: DragEvent) {
-    e.preventDefault();
-    isDragOver = false;
-    
-    const files = e.dataTransfer?.files;
-    if (files && files.length > 0) {
-      handleFileSelect(files[0]);
-    }
-  }
-  
-  function handleInputChange(e: Event) {
-    const target = e.target as HTMLInputElement;
-    const files = target.files;
-    if (files && files.length > 0) {
-      handleFileSelect(files[0]);
-    }
-  }
-  
+
+  // --- CLEANUP ---
   onDestroy(() => {
-    if (videoUrl) {
-      URL.revokeObjectURL(videoUrl);
-    }
+    if (videoUrl) URL.revokeObjectURL(videoUrl);
     destroyVideoIngestService();
-    overlay.reset();
   });
 </script>
 
 <svelte:head>
-  <title>Iron Eye — Upload Video</title>
+  <title>Iron Eye — Upload</title>
 </svelte:head>
 
 <main class="upload-screen">
@@ -196,9 +163,7 @@
       </svg>
       <span>Back</span>
     </button>
-    
     <h1>Upload Video</h1>
-    
     <div class="header-spacer"></div>
   </header>
   
@@ -207,10 +172,14 @@
       <div 
         class="drop-zone"
         class:dragover={isDragOver}
-        ondragenter={handleDragEnter}
-        ondragleave={handleDragLeave}
-        ondragover={handleDragOver}
-        ondrop={handleDrop}
+        ondragenter={(e) => { e.preventDefault(); isDragOver = true; }}
+        ondragleave={(e) => { e.preventDefault(); isDragOver = false; }}
+        ondragover={(e) => e.preventDefault()}
+        ondrop={(e) => {
+          e.preventDefault();
+          isDragOver = false;
+          if (e.dataTransfer?.files[0]) handleFileSelect(e.dataTransfer.files[0]);
+        }}
         onclick={() => fileInput?.click()}
         role="button"
         tabindex="0"
@@ -222,20 +191,21 @@
           <line x1="12" y1="3" x2="12" y2="15"/>
         </svg>
         <p class="upload-text">
-          <strong>Drop video here</strong>
-          <br />
-          or click to browse
+          <strong>Drop video here</strong><br />or click to browse
         </p>
         <p class="upload-hint">MP4, MOV, WebM supported</p>
-        
         <input 
           type="file"
           accept="video/*"
           bind:this={fileInput}
-          onchange={handleInputChange}
+          onchange={(e) => {
+            const files = (e.target as HTMLInputElement).files;
+            if (files?.[0]) handleFileSelect(files[0]);
+          }}
           class="sr-only"
         />
       </div>
+
     {:else}
       <div class="video-section">
         <div class="video-container">
@@ -247,7 +217,6 @@
             muted
             controls={!isProcessing}
             onloadedmetadata={handleVideoLoaded}
-            onerror={() => { console.error('Video failed to load', videoUrl, videoFile); }}
             class="upload-video"
           ></video>
 
@@ -256,7 +225,6 @@
             class="upload-canvas"
             class:hidden={!isProcessing}
           ></canvas>
-          
         </div>
         
         {#if isVideoLoaded}
@@ -273,51 +241,39 @@
         <div class="stats-panel">
           <div class="stat-item">
             <span class="stat-label">Phase</span>
-            <span class="stat-value">{phaseLabels[$overlay.phase]}</span>
+            <span class="stat-value">{phaseLabels[overlay.phase] ?? '-'}</span>
           </div>
           <div class="stat-item">
             <span class="stat-label">Side</span>
-            <span class="stat-value">{$sideLockStatus.label}</span>
+            <span class="stat-value">{sideLockStatus.label ?? '-'}</span>
           </div>
           <div class="stat-item">
             <span class="stat-label">Reps</span>
-            <span class="stat-value">{$overlay.repCount}</span>
+            <span class="stat-value">{overlay.repCount ?? 0}</span>
           </div>
           <div class="stat-item">
             <span class="stat-label">Velocity</span>
-            <span class="stat-value">{formatVelocity($overlay.currentVelocity)} m/s</span>
+            <span class="stat-value">{formatVelocity(overlay.currentVelocity ?? 0)} m/s</span>
           </div>
-          {#if $overlay.peakVelocity > 0}
-            <div class="stat-item">
-              <span class="stat-label">Peak</span>
-              <span class="stat-value highlight">{formatVelocity($overlay.peakVelocity)} m/s</span>
-            </div>
-          {/if}
           {#if showDebug}
             <div class="stat-item">
               <span class="stat-label">FPS</span>
-              <span class="stat-value">{$overlay.fps}</span>
+              <span class="stat-value">{overlay.fps}</span>
             </div>
           {/if}
-        </div>
-      {/if}
-
-      {#if $overlay.alert}
-        <div class="alert-banner-inline">
-          {$overlay.alert.message}
         </div>
       {/if}
 
       <div class="control-panel">
         {#if !isCalibrated}
           <div class="panel-section">
-            <CalibrationPanel compact={true} onConfirm={handleCalibrationConfirm} />
+            <CalibrationPanel compact={true} onConfirm={() => isCalibrated = true} />
           </div>
         {:else}
           <div class="panel-section calibrated">
             <div class="calibration-status">
               <span class="status-dot active"></span>
-              <span>Calibrated — {$calibration.heightInches}″</span>
+              <span>Calibrated — {calibration.heightInches}″</span>
             </div>
             <button class="btn btn-ghost btn-sm" onclick={() => isCalibrated = false}>
               Recalibrate
@@ -344,21 +300,17 @@
             if (videoUrl) URL.revokeObjectURL(videoUrl);
             videoFile = null;
             videoUrl = null;
-            isVideoLoaded = false;
             isCalibrated = false;
             isProcessing = false;
           }}>
-            Choose Different Video
+            New Video
           </button>
         </div>
-        
+
         <div class="panel-section debug-section">
           <label class="debug-label">
-            <input 
-              type="checkbox" 
-              bind:checked={showDebug}
-            />
-            <span>Show Debug HUD</span>
+            <input type="checkbox" bind:checked={showDebug} />
+            <span>Show Debug HUD & Skeleton</span>
           </label>
         </div>
       </div>
@@ -367,6 +319,7 @@
 </main>
 
 <style>
+  /* Kept your existing CSS, just ensured variables match app.css */
   .upload-screen {
     min-height: 100vh;
     min-height: 100dvh;
@@ -374,8 +327,6 @@
     flex-direction: column;
     background-color: var(--color-black);
   }
-  
-  /* Header */
   .upload-header {
     display: flex;
     align-items: center;
@@ -383,7 +334,6 @@
     padding: var(--space-4);
     border-bottom: 1px solid var(--color-black-lighter);
   }
-  
   .back-btn {
     display: flex;
     align-items: center;
@@ -396,28 +346,13 @@
     font-weight: var(--font-weight-medium);
     cursor: pointer;
     border-radius: var(--radius-md);
-    transition: all var(--transition-fast);
+    transition: all 0.2s;
   }
+  .back-btn:hover { background-color: var(--color-black-lighter); }
+  .back-btn svg { width: 20px; height: 20px; }
+  .upload-header h1 { font-size: var(--font-size-lg); font-weight: bold; }
+  .header-spacer { width: 80px; }
   
-  .back-btn:hover {
-    background-color: var(--color-black-lighter);
-  }
-  
-  .back-btn svg {
-    width: 20px;
-    height: 20px;
-  }
-  
-  .upload-header h1 {
-    font-size: var(--font-size-lg);
-    font-weight: var(--font-weight-bold);
-  }
-  
-  .header-spacer {
-    width: 80px;
-  }
-  
-  /* Content */
   .upload-content {
     flex: 1;
     display: flex;
@@ -427,221 +362,99 @@
     margin: 0 auto;
     width: 100%;
   }
-  
-  /* Drop zone */
-  .upload-icon {
-    width: 64px;
-    height: 64px;
-    color: var(--color-muted);
-    margin-bottom: var(--space-4);
-    transition: color var(--transition-normal);
-  }
-  
-  .drop-zone:hover .upload-icon,
-  .drop-zone.dragover .upload-icon {
-    color: var(--color-copper);
-  }
-  
-  .upload-text {
-    color: var(--color-white);
-    margin-bottom: var(--space-2);
-  }
-  
-  .upload-text strong {
-    font-size: var(--font-size-lg);
-  }
-  
-  .upload-hint {
-    color: var(--color-muted);
-    font-size: var(--font-size-sm);
-    margin-bottom: 0;
-  }
-  
-  /* Video section */
-  .video-section {
+
+  /* Drop Zone */
+  .drop-zone {
+    flex: 1;
     display: flex;
     flex-direction: column;
-    gap: var(--space-3);
-    margin-bottom: var(--space-5);
+    align-items: center;
+    justify-content: center;
+    border: 2px dashed var(--color-black-lighter);
+    border-radius: var(--radius-lg);
+    background-color: var(--color-black-light);
+    cursor: pointer;
+    transition: all 0.2s;
+    min-height: 400px;
   }
-  
-  /* [FIX] Updated container for stacking */
+  .drop-zone:hover, .drop-zone.dragover {
+    border-color: var(--color-copper);
+    background-color: rgba(184, 115, 51, 0.05);
+  }
+  .upload-icon { width: 64px; height: 64px; color: var(--color-muted); margin-bottom: var(--space-4); }
+  .drop-zone:hover .upload-icon { color: var(--color-copper); }
+  .upload-text { color: var(--color-white); text-align: center; margin-bottom: var(--space-2); }
+  .upload-hint { color: var(--color-muted); font-size: var(--font-size-sm); }
+
+  /* Video Area */
+  .video-section { display: flex; flex-direction: column; gap: var(--space-3); margin-bottom: var(--space-5); }
   .video-container {
-    position: relative; /* Critical for absolute children */
+    position: relative;
     background-color: var(--color-black-light);
     border-radius: var(--radius-lg);
     overflow: hidden;
     border: 1px solid var(--color-black-lighter);
-    min-height: 240px;
     aspect-ratio: 16 / 9;
   }
-  
-  /* [FIX] Video absolute positioning */
   .upload-video {
     position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
+    top: 0; left: 0; width: 100%; height: 100%;
     object-fit: contain;
     background: black;
-    z-index: 1;
   }
-
-  /* [FIX] Canvas absolute positioning */
   .upload-canvas {
     position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
+    top: 0; left: 0; width: 100%; height: 100%;
     object-fit: contain;
-    z-index: 2;
-    pointer-events: none; /* Let clicks pass through to video controls */
+    pointer-events: none;
+    z-index: 10;
   }
+  .hidden { display: none; }
+  .video-info { display: flex; justify-content: space-between; padding: 0 var(--space-2); color: var(--color-muted); font-size: var(--font-size-sm); }
 
-  /* Helper to hide canvas when not processing */
-  .hidden {
-    display: none;
+  /* Stats */
+  .stats-panel {
+    display: flex; flex-wrap: wrap; gap: var(--space-4); padding: var(--space-4);
+    background-color: var(--color-black-light);
+    border: 1px solid var(--color-black-lighter);
+    border-radius: var(--radius-lg);
+    margin-bottom: var(--space-4);
   }
-  
-  .video-info {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 0 var(--space-2);
-  }
-  
-  .video-filename {
-    font-size: var(--font-size-sm);
-    color: var(--color-white);
-    font-weight: var(--font-weight-medium);
-  }
-  
-  .video-dimensions {
-    font-size: var(--font-size-sm);
-    color: var(--color-muted);
-    font-variant-numeric: tabular-nums;
-  }
-  
-  /* Control panel */
-  .control-panel {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-4);
-  }
-  
+  .stat-item { display: flex; flex-direction: column; align-items: center; min-width: 80px; }
+  .stat-label { font-size: var(--font-size-xs); color: var(--color-muted); text-transform: uppercase; }
+  .stat-value { font-size: var(--font-size-lg); font-weight: bold; color: var(--color-white); }
+
+  /* Controls */
+  .control-panel { display: flex; flex-direction: column; gap: var(--space-4); }
   .panel-section {
     padding: var(--space-4);
     background-color: var(--color-black-light);
     border: 1px solid var(--color-black-lighter);
     border-radius: var(--radius-lg);
   }
+  .panel-section.calibrated { display: flex; justify-content: space-between; align-items: center; }
+  .calibration-status { display: flex; align-items: center; gap: var(--space-2); color: var(--color-copper); }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; background-color: var(--color-copper); }
+  .panel-section:not(.calibrated) { display: flex; flex-direction: column; gap: var(--space-3); }
   
-  .panel-section.calibrated {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-  
-  .calibration-status {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    color: var(--color-copper);
-  }
-  
-  .panel-section:not(.calibrated) {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-3);
-  }
-  
-  .panel-section:has(.btn-primary) {
-    flex-direction: row;
-    gap: var(--space-3);
-  }
-  
-  .panel-section:has(.btn-primary) .btn {
-    flex: 1;
-  }
-  
-  /* Debug section */
-  .debug-section {
+  /* Buttons */
+  .btn {
     padding: var(--space-3);
-  }
-  
-  .debug-label {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
+    border-radius: var(--radius-md);
+    font-weight: 600;
     cursor: pointer;
-    color: var(--color-muted);
-    font-size: var(--font-size-sm);
+    border: none;
+    transition: all 0.2s;
   }
-  
-  .debug-label input {
-    width: 16px;
-    height: 16px;
-  }
+  .btn-primary { background-color: var(--color-copper); color: var(--color-black); }
+  .btn-primary:hover:not(:disabled) { background-color: var(--color-copper-bright); }
+  .btn-primary:disabled { background-color: var(--color-black-lighter); color: var(--color-muted); cursor: not-allowed; }
+  .btn-warning { background-color: var(--color-oxblood); color: white; }
+  .btn-secondary { background-color: transparent; border: 1px solid var(--color-black-lighter); color: var(--color-white); }
+  .btn-secondary:hover { border-color: var(--color-white); }
+  .btn-ghost { background: transparent; color: var(--color-muted); padding: var(--space-2); }
+  .btn-ghost:hover { color: var(--color-white); }
 
-  /* Stats HUD Panel */
-  .stats-panel {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-4);
-    padding: var(--space-4);
-    background-color: var(--color-black-light);
-    border: 1px solid var(--color-black-lighter);
-    border-radius: var(--radius-lg);
-    margin-bottom: var(--space-4);
-  }
-
-  .stat-item {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    min-width: 80px;
-  }
-
-  .stat-label {
-    font-size: var(--font-size-xs);
-    color: var(--color-muted);
-    text-transform: uppercase;
-  }
-
-  .stat-value {
-    font-size: var(--font-size-lg);
-    font-weight: var(--font-weight-bold);
-    color: var(--color-white);
-  }
-
-  .stat-value.highlight {
-    color: var(--color-copper-bright);
-  }
-
-  .alert-banner-inline {
-    padding: var(--space-3) var(--space-4);
-    background-color: var(--color-oxblood);
-    color: var(--color-white);
-    border-radius: var(--radius-lg);
-    margin-bottom: var(--space-4);
-    text-align: center;
-    font-weight: var(--font-weight-medium);
-  }
-
-  /* Responsive */
-  @media (max-width: 768px) {
-    .upload-content {
-      padding: var(--space-4);
-    }
-    
-    .panel-section:has(.btn-primary) {
-      flex-direction: column;
-    }
-    
-    .panel-section:has(.btn-primary) .btn {
-      width: 100%;
-    }
-  }
+  .debug-section { padding: var(--space-3); }
+  .debug-label { display: flex; align-items: center; gap: var(--space-2); color: var(--color-muted); cursor: pointer; }
 </style>

@@ -27,7 +27,7 @@
     ui, 
     videoIngest 
   } from '$lib/stores';
-  import type { FrameData } from '$lib/types';
+  import type { FrameData, PoseResult } from '$lib/types';
   
   // State
   let videoElement: HTMLVideoElement;
@@ -38,11 +38,7 @@
   let showDebug = $state(false);
   
   // Video ingest service
-  let videoService = getVideoIngestService({
-    targetFps: 60,
-    fallbackFps: 30,
-    facingMode: 'environment'
-  });
+  let videoService = getVideoIngestService();
   
   // Initialize camera on mount
   onMount(async () => {
@@ -51,9 +47,13 @@
     ui.setLoading(true);
     
     try {
-      const success = await videoService.initializeLiveCamera(
+      const success = await videoService.initialize(
         videoElement,
-        handleFrame
+        handleFrame,
+        {
+          targetFps: 60,
+          facingMode: 'environment'
+        }
       );
       
       if (!success) {
@@ -85,9 +85,9 @@
   });
   
   // Handle incoming frames
-  function handleFrame(frame: FrameData) {
+  function handleFrame(poseResult: PoseResult) {
     // Update FPS in overlay
-    overlay.updateFps($videoIngest.actualFps);
+    overlay.updateFps(videoIngest.actualFps);
     
     // TODO: Milestone 2+ will add pose detection and phase classification here
     // For now, just tracking that frames are being processed
