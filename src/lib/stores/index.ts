@@ -100,73 +100,6 @@ function createCalibrationStore() {
 
 export const calibration = createCalibrationStore();
 
-// ============================================================
-// Overlay State Store (real-time UI updates)
-// ============================================================
-
-const defaultOverlay: OverlayState = {
-  phase: 'STANDING',
-  phaseConfidence: 0,
-  side: null,
-  sideLocked: false,
-  sideConfidence: 0,
-  currentVelocity: 0,
-  peakVelocity: 0,
-  repCount: 0,
-  setCount: 1,
-  alert: null,
-  fps: 0,
-  trackingConfidence: 'lost'
-};
-
-function createOverlayStore() {
-  const { subscribe, set, update } = writable<OverlayState>(defaultOverlay);
-
-  return {
-    subscribe,
-    updatePhase: (phase: SnatchPhase, confidence: number) => {
-      update(o => ({ ...o, phase, phaseConfidence: confidence }));
-    },
-    updateSide: (side: Side, locked: boolean, confidence: number) => {
-      update(o => ({
-        ...o,
-        side,
-        sideLocked: locked,
-        sideConfidence: confidence
-      }));
-    },
-    updateVelocity: (current: number, peak: number) => {
-      update(o => ({
-        ...o,
-        currentVelocity: current,
-        peakVelocity: peak
-      }));
-    },
-    incrementRep: () => {
-      update(o => ({ ...o, repCount: o.repCount + 1 }));
-    },
-    incrementSet: () => {
-      update(o => ({
-        ...o,
-        setCount: o.setCount + 1,
-        repCount: 0,
-        peakVelocity: 0
-      }));
-    },
-    setAlert: (alert: Alert | null) => {
-      update(o => ({ ...o, alert }));
-    },
-    updateFps: (fps: number) => {
-      update(o => ({ ...o, fps }));
-    },
-    updateTracking: (confidence: ConfidenceLevel) => {
-      update(o => ({ ...o, trackingConfidence: confidence }));
-    },
-    reset: () => set(defaultOverlay)
-  };
-}
-
-export const overlay = createOverlayStore();
 
 // ============================================================
 // UI State Store
@@ -271,23 +204,5 @@ export const sideLockStatus = derived(
   })
 );
 
-// Tracking quality for UI
-export const trackingStatus = derived(
-  overlay,
-  ($overlay) => ({
-    confidence: $overlay.trackingConfidence,
-    isTracking: $overlay.trackingConfidence !== 'lost',
-    label: {
-      high: 'Tracking',
-      medium: 'Tracking',
-      low: 'Low Confidence',
-      lost: 'No Tracking'
-    }[$overlay.trackingConfidence],
-    color: {
-      high: 'var(--color-copper)',
-      medium: 'var(--color-copper)',
-      low: 'var(--color-oxblood)',
-      lost: 'var(--color-muted)'
-    }[$overlay.trackingConfidence]
-  })
-);
+
+;

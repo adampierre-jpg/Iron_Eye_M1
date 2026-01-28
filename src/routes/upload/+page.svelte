@@ -10,12 +10,15 @@
   import { analysisService } from '$lib/services/analysis'; // ✅ Added for manual static capture
 
   // Stores
+ // Stores
   import {
     calibration,
-    overlay,
     videoIngest,
     sideLockStatus
   } from '$lib/stores';
+  
+  // ✅ Import from the new Rune store
+  import { overlay } from '$lib/stores/overlay.svelte';
   // Types
   import type { SnatchPhase, PoseResult } from '$lib/types';
   import { CalibrationPanel } from '$lib/components';
