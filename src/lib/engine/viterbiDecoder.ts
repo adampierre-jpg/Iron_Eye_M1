@@ -1,114 +1,126 @@
-import config from '../config.json';
+// src/lib/engine/viterbiDecoder.ts
+
+export type SnatchPhase = 
+  | 'STANDING' | 'HANDONBELL' | 'HIKE' | 'PULL' | 'FLOAT' 
+  | 'LOCKOUT' | 'DROP' | 'CATCH' | 'PARK';
+
+export const PHASES: SnatchPhase[] = [
+  'STANDING', 'HANDONBELL', 'HIKE', 'PULL', 'FLOAT',
+  'LOCKOUT', 'DROP', 'CATCH', 'PARK'
+];
+
+// Phase constants to avoid magic strings/numbers
+const PHASE_MAP = PHASES.reduce((acc, p, i) => { acc[p] = i; return acc; }, {} as Record<SnatchPhase, number>);
+
+// Tunable parameters (Hyperparameters)
+const SELF_TRANSITION_BONUS = 2.0;   // Encourages sticking to current phase
+const TRANSITION_PENALTY = 0.0;      // Neutral cost for legal switches
+const ILLEGAL_PENALTY = -1000.0;     // Effectively impossible
+
+// The Rules of the Sport (State Machine)
+const TRANSITION_GRAMMAR: Record<SnatchPhase, SnatchPhase[]> = {
+  STANDING:    ['STANDING', 'HANDONBELL'],
+  HANDONBELL:  ['HANDONBELL', 'HIKE', 'STANDING'], // Allow reset to standing
+  HIKE:        ['HIKE', 'PULL'],
+  PULL:        ['PULL', 'FLOAT', 'DROP'], // Bailout to drop allowed
+  FLOAT:       ['FLOAT', 'LOCKOUT', 'DROP'],
+  LOCKOUT:     ['LOCKOUT', 'DROP', 'PARK'],
+  DROP:        ['DROP', 'CATCH', 'STANDING'], // Reset if missed catch
+  CATCH:       ['CATCH', 'PARK', 'STANDING', 'PULL'], // PULL allows chaining reps
+  PARK:        ['PARK', 'STANDING']
+};
 
 type TransitionMatrix = number[][];
 
 export class ViterbiDecoder {
   private transitionMatrix: TransitionMatrix;
   private numClasses: number;
-  private state: number; // Persistent state for streaming/windowed inference
+  private state: number; // Persistent state index for streaming
 
   constructor() {
-    this.numClasses = config.classes.length;
-    this.state = 0; // Default start state (STANDING)
+    this.numClasses = PHASES.length;
+    this.state = PHASE_MAP['STANDING'];
     this.transitionMatrix = this.buildTransitionMatrix();
   }
 
-  /**
-   * Constructs the log-probability transition matrix from the grammar config.
-   */
   private buildTransitionMatrix(): TransitionMatrix {
-    const matrix = Array(this.numClasses).fill(0).map(() => Array(this.numClasses).fill(-Infinity));
-    const phases = config.classes;
-    const grammar = config.viterbi.grammar as Record;
+    const C = this.numClasses;
+    // Fill with illegal penalty by default
+    const matrix = Array(C).fill(0).map(() => Array(C).fill(ILLEGAL_PENALTY));
 
-    phases.forEach((fromPhase, fromIdx) => {
-      const allowedTargets = grammar[fromPhase];
-      
-      // Fill allowed transitions
+    PHASES.forEach((fromPhase, fromIdx) => {
+      const allowedTargets = TRANSITION_GRAMMAR[fromPhase];
       if (allowedTargets) {
         allowedTargets.forEach(toPhase => {
-          const toIdx = phases.indexOf(toPhase);
-          if (toIdx !== -1) {
-            const isSelf = fromIdx === toIdx;
-            // Use bonus for self-loop to encourage stability, generic penalty for legal switches
-            matrix[fromIdx][toIdx] = isSelf 
-              ? config.viterbi.self_transition_bonus 
-              : config.viterbi.transition_penalty;
-          }
+          const toIdx = PHASE_MAP[toPhase];
+          // Diagonal (Self-loop) gets bonus, valid moves get 0 penalty
+          matrix[fromIdx][toIdx] = (fromIdx === toIdx) 
+            ? SELF_TRANSITION_BONUS 
+            : TRANSITION_PENALTY;
         });
       }
-      
-      // Implicit: Illegal transitions remain -Infinity (or very low negative number)
     });
 
     return matrix;
   }
 
   /**
-   * Decodes a sequence of logits using the Viterbi algorithm.
-   * Adapted for a sliding window where we care most about the *final* state.
-   * 
-   * @param logits Flat Float32Array of shape [T * numClasses]
-   * @param steps Time steps (T)
-   * @returns The index of the most likely class at the final step.
+   * Decodes the logits to find the most likely current phase.
+   * Matches the API expected by PhaseClassifier.
    */
-  public decode(logits: Float32Array, steps: number): number {
+  public decodeLast(logits: Float32Array, steps: number): SnatchPhase {
     const C = this.numClasses;
-    // DP Table: vit[t][s] = max prob of path ending in state s at time t
-    // We only need previous step to compute current, but keeping full table for clarity/debugging if needed.
-    // Optimization: We can reduce memory to O(C) since we only stream forward.
     
+    // DP Tables (Reuse arrays would be better for memory, but this is cleaner)
     let prevScores = new Float32Array(C);
     let currScores = new Float32Array(C);
 
-    // Initialization (t=0) based on persistent state
-    // We enforce that the sequence MUST start from a valid transition of the previous window's end state
+    // 1. Initialize t=0 based on the PERSISTENT previous state
+    // This connects the previous window to the current window
     for (let s = 0; s < C; s++) {
-      const transitionScore = this.transitionMatrix[this.state][s];
-      // Logits are raw, let's assume they are somewhat normalized or just use them directly as scores
-      // Ideally input should be log-softmax, but raw logits work for max-sum Viterbi too if consistent.
-      prevScores[s] = (transitionScore > -900 ? transitionScore : config.viterbi.illegal_penalty) + logits[s];
+      const trans = this.transitionMatrix[this.state][s];
+      // logits are flattened: [T, C]. First C elements are t=0
+      prevScores[s] = trans + logits[s];
     }
 
-    // Forward Pass
+    // 2. Forward Viterbi (Max-Sum)
     for (let t = 1; t < steps; t++) {
       const offset = t * C;
-      for (let s = 0; s < C; s++) { // s = current state
+      
+      for (let s = 0; s < C; s++) { // s = current candidate
         let maxScore = -Infinity;
         
-        for (let p = 0; p < C; p++) { // p = previous state
-           // Score = PrevPathScore + Transition(p->s) + Emission(s)
-           const trans = this.transitionMatrix[p][s] > -900 ? this.transitionMatrix[p][s] : config.viterbi.illegal_penalty;
-           const score = prevScores[p] + trans + logits[offset + s];
-           
-           if (score > maxScore) {
-             maxScore = score;
-           }
+        for (let p = 0; p < C; p++) { // p = previous candidate
+          const score = prevScores[p] + this.transitionMatrix[p][s] + logits[offset + s];
+          if (score > maxScore) maxScore = score;
         }
         currScores[s] = maxScore;
       }
       
-      // Swap arrays
+      // Swap buffers
       prevScores.set(currScores);
     }
 
-    // Termination: Find max score in the last timestep
+    // 3. Select Winner
+    let bestIdx = 0;
     let bestScore = -Infinity;
-    let bestState = 0;
-    
     for (let s = 0; s < C; s++) {
       if (prevScores[s] > bestScore) {
         bestScore = prevScores[s];
-        bestState = s;
+        bestIdx = s;
       }
     }
 
-    // Update persistent state for next window
-    this.state = bestState;
-    return bestState;
+    // 4. Update Persistence & Return
+    this.state = bestIdx;
+    return PHASES[bestIdx];
   }
   
-  public getClassName(idx: number): string {
-      return config.classes[idx] || "UNKNOWN";
+  // Helper to force a reset if UI needs it
+  public reset() {
+    this.state = PHASE_MAP['STANDING'];
   }
 }
+
+// Export singleton to match PhaseClassifier imports
+export const viterbiDecoder = new ViterbiDecoder();

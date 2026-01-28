@@ -1,112 +1,98 @@
 import * as ort from 'onnxruntime-web';
-import { ViterbiDecoder } from './viterbiDecoder';
-import config from '../config.json';
+import { viterbiDecoder, type SnatchPhase } from './viterbiDecoder';
 
-export interface ClassificationResult {
-    phaseIndex: number;
-    phaseName: string;
-    logits: Float32Array;
-    inferenceTime: number;
+ort.env.wasm.numThreads = 1;
+ort.env.wasm.simd = true;
+
+interface Config {
+  sequence_length: number; // 36
+  num_features: number;    // 12
+  model_version: string;
 }
 
 export class PhaseClassifier {
-    private session: ort.InferenceSession | null = null;
-    private viterbi: ViterbiDecoder;
-    private inputName: string = '';
+  private session: ort.InferenceSession | null = null;
+  private config: Config | null = null;
+  private buffer: Float32Array;
+  private bufIdx = 0;
+
+  constructor() {
+    // Pre-allocate buffer (Max size assumption or resize later)
+    this.buffer = new Float32Array(100 * 12); 
+  }
+
+  async load(modelPath: string, configPath: string): Promise<void> {
+    try {
+      this.config = await (await fetch(configPath)).json();
+      
+      // Initialize Session
+      this.session = await ort.InferenceSession.create(modelPath, {
+        executionProviders: ['wasm'],
+      });
+      
+      // Resize buffer to exact model dimensions
+      if (this.config) {
+         this.buffer = new Float32Array(this.config.sequence_length * this.config.num_features);
+      }
+
+      console.log('✅ [Classifier] Loaded. Input Name:', this.session.inputNames[0]);
+    } catch (e) {
+      console.error('❌ [Classifier] Load failed:', e);
+    }
+  }
+
+  addFrame(features: number[]): void {
+    if (!this.config) return;
+    const { sequence_length: T, num_features: F } = this.config;
+
+    // Rolling Buffer Logic: Shift Left, Append Right
+    if (this.bufIdx >= T) {
+      this.buffer.copyWithin(0, F); // Shift everything left by F
+      const start = (T - 1) * F;
+      for (let i = 0; i < F; i++) this.buffer[start + i] = features[i];
+    } else {
+      // Filling up
+      const start = this.bufIdx * F;
+      for (let i = 0; i < F; i++) this.buffer[start + i] = features[i];
+      this.bufIdx++;
+    }
+  }
+
+  async classify(): Promise<SnatchPhase | null> {
+    if (!this.session || !this.config) return null;
     
-    // Buffer for sliding window: [FrameWindow, FeatureDim]
-    // We flatten it for ONNX input
-    private featureBuffer: Float32Array;
-    private frameCount: number = 0;
+    const { sequence_length: T, num_features: F } = this.config;
 
-    constructor() {
-        this.viterbi = new ViterbiDecoder();
-        // Initialize buffer with zeros
-        const size = config.model.frame_window * config.model.feature_dim;
-        this.featureBuffer = new Float32Array(size);
+    // 1. Wait for Buffer to Fill (Crucial!)
+    // The model needs 36 frames of context before it can speak.
+    if (this.bufIdx < T) {
+       // Optional: console.debug(`[Classifier] Buffering... ${this.bufIdx}/${T}`);
+       return null;
     }
 
-    /**
-     * Initializes the ONNX Runtime session.
-     * Ensure the .onnx file is in the public folder.
-     */
-    async initialize() {
-        try {
-            // Set backend to WebGL for performance
-            ort.env.wasm.numThreads = 1; // Adjust based on device
-            
-            const sessionOption: ort.InferenceSession.SessionOptions = {
-                executionProviders: ['webgl', 'wasm'],
-                graphOptimizationLevel: 'all'
-            };
+    try {
+      // 2. Prepare Tensor
+      // Shape must be [1, T, F] -> [1, 36, 12]
+      const inputTensor = new ort.Tensor('float32', this.buffer, [1, T, F]);
+      
+      // 3. Run Inference (Dynamic Input Name)
+      // We read the input name directly from the loaded session
+      const inputName = this.session.inputNames[0]; 
+      const feeds = { [inputName]: inputTensor };
+      
+      const results = await this.session.run(feeds);
+      
+      // 4. Get Output (Logits)
+      const outputName = this.session.outputNames[0];
+      const logits = results[outputName].data as Float32Array;
 
-            this.session = await ort.InferenceSession.create(config.model.path, sessionOption);
-            this.inputName = this.session.inputNames[0];
-            
-            console.log(`[PhaseClassifier] Model loaded: ${this.inputName}`);
-        } catch (e) {
-            console.error('[PhaseClassifier] Failed to init session:', e);
-            throw e;
-        }
+      // 5. Decode
+      // We only care about the *last* frame's prediction in the sequence
+      return viterbiDecoder.decodeLast(logits, T);
+
+    } catch (e) {
+      console.error('❌ [Classifier] Inference error:', e);
+      return null;
     }
-
-    /**
-     * Adds a new frame of features and runs inference.
-     * @param features Normalized features for the current frame (Float32Array[12])
-     */
-    async processFrame(features: Float32Array): Promise {
-        if (!this.session) return null;
-
-        // 1. Update Buffer (Shift Left, Push New)
-        // Shift existing data: move index featureDim to 0
-        const dim = config.model.feature_dim;
-        const totalSize = this.featureBuffer.length;
-        
-        // Efficient shift using subarray copy
-        this.featureBuffer.copyWithin(0, dim);
-        // Insert new at end
-        this.featureBuffer.set(features, totalSize - dim);
-        
-        this.frameCount++;
-
-        // Warmup period: don't classify until buffer is full? 
-        // Or just classify zeros (handled by Viterbi usually)
-        if (this.frameCount < config.model.frame_window) {
-            return null; // or return STANDING
-        }
-
-        const start = performance.now();
-
-        // 2. Prepare Tensor [1, 36, 12]
-        // Note: Check if model expects flattened [1, 36, 12] or specific layout
-        const tensor = new ort.Tensor('float32', this.featureBuffer, config.model.input_shape);
-
-        // 3. Run Inference
-        const feeds: Record = {};
-        feeds[this.inputName] = tensor;
-        
-        const results = await this.session.run(feeds);
-        
-        // 4. Get Logits
-        // Output name usually generic, taking first output
-        const outputName = this.session.outputNames[0];
-        const logits = results[outputName].data as Float32Array;
-
-        // 5. Viterbi Decode
-        // The model output might be sequence [1, 36, 9] or single dense [1, 9]
-        // If 1D CNN returns sequence, we pass full sequence.
-        // If it returns single classification for the window, we pass that.
-        // Assuming Model Output is Sequence [1, 36, 9] based on Viterbi usage:
-        const seqLen = config.model.frame_window;
-        const phaseIdx = this.viterbi.decode(logits, seqLen);
-
-        const end = performance.now();
-
-        return {
-            phaseIndex: phaseIdx,
-            phaseName: this.viterbi.getClassName(phaseIdx),
-            logits: logits,
-            inferenceTime: end - start
-        };
-    }
+  }
 }

@@ -39,6 +39,6 @@ declare module "$app/types" {
 		};
 		Pathname(): "/" | "/live" | "/live/" | "/summary" | "/summary/" | "/upload" | "/upload/";
 		ResolvedPathname(): `${"" | `/${string}`}${ReturnType<AppTypes['Pathname']>}`;
-		Asset(): "/favicon.svg" | "/robots.txt" | string & {};
+		Asset(): "/favicon.svg" | "/models/config.json" | "/models/snatch_cnn_v4.onnx" | "/robots.txt" | string & {};
 	}
 }

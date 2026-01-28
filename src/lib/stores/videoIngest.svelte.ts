@@ -1,13 +1,10 @@
 // src/lib/stores/videoIngest.svelte.ts
-import type { VideoIngestState } from '$lib/types';
+class VideoIngestStore {
+    isActive = $state(false);
+    isPlaying = $state(false);
+    actualFps = $state(0);
+    frameCount = $state(0);
+    droppedFrames = $state(0);
+}
 
-// Use $state for Svelte 5 rune-based store
-const initialVideoIngestState: VideoIngestState = {
-  isActive: false,
-  actualFps: 0,
-  frameCount: 0,
-  droppedFrames: 0,
-  lastFrameTimestamp: 0,
-};
-
-export const videoIngest = $state(initialVideoIngestState);
+export const videoIngest = new VideoIngestStore();
