@@ -1,27 +1,45 @@
 // src/lib/services/pose.ts
 import { browser } from '$app/environment';
-import type { Results } from '@mediapipe/pose'; // Type-only import is safe on server
+import type { Results } from '@mediapipe/pose'; // Type-only import is safe
 import type { PoseResult, Keypoint } from '$lib/types';
 
 class PoseDetectorService {
-  private detector: any = null; // internal instance
+  private detector: any = null;
   private isReady = false;
   private lastFrameTime = 0;
 
   async initialize(): Promise<boolean> {
-    // 1. Safety check: If we are on the server, STOP.
     if (!browser) return false;
-    
     if (this.isReady) return true;
 
     try {
       console.log('⏳ [PoseService] Loading MediaPipe dynamically...');
       
-      // 2. Dynamic Import: This loads the library ONLY when this function runs
-      const { Pose } = await import('@mediapipe/pose');
+      const mpModule = await import('@mediapipe/pose');
+      console.log('📦 [PoseService] Keys:', Object.keys(mpModule)); // Debugging aid
 
-      this.detector = new Pose({
-        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+      // AGGRESSIVE SEARCH STRATEGY
+      // 1. Check Standard Named Export
+      let PoseConstructor = mpModule.Pose;
+      
+      // 2. Check Default Export (CommonJS Interop)
+      if (!PoseConstructor && (mpModule as any).default) {
+        PoseConstructor = (mpModule as any).default.Pose || (mpModule as any).default;
+      }
+
+      // 3. Fallback: Check Global Scope (Window)
+      // Sometimes Vite puts it on window.Pose or window.MediaPipe
+      if (!PoseConstructor && (window as any).Pose) {
+         console.warn('⚠️ [PoseService] Found Pose on window object.');
+         PoseConstructor = (window as any).Pose;
+      }
+
+      if (!PoseConstructor) {
+        throw new Error(`Could not find "Pose" constructor. Available keys: ${Object.keys(mpModule).join(', ')}`);
+      }
+
+      this.detector = new PoseConstructor({
+        locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
       });
 
       this.detector.setOptions({
@@ -41,6 +59,9 @@ class PoseDetectorService {
       return false;
     }
   }
+
+  // ... rest of the file (process, normalizeResults, getEmptyResult) remains identical ...
+  // (Paste the existing process/normalize logic here)
 
   async process(input: HTMLVideoElement): Promise<PoseResult> {
     if (!this.detector || !this.isReady) return this.getEmptyResult();
