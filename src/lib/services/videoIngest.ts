@@ -1,5 +1,6 @@
 // src/lib/services/videoIngest.ts
-import { videoIngest, overlay } from '$lib/stores'; // Import the stores
+import { overlay } from '$lib/stores/overlay.svelte'; // ✅ DIRECT IMPORT
+import { videoIngest } from '$lib/stores/videoIngest.svelte'; // ✅ DIRECT IMPORT
 import { poseService } from '$lib/services/pose';
 import { analysisService } from '$lib/services/analysis';
 import type { PoseResult } from '$lib/types';
@@ -13,9 +14,6 @@ class VideoIngestService {
   private isProcessingFrame = false;
   private isActive = false;
 
-  /**
-   * Initialize the pipeline
-   */
   async initialize(video: HTMLVideoElement, callback: FrameCallback): Promise<boolean> {
     if (!video) return false;
 
@@ -24,10 +22,7 @@ class VideoIngestService {
 
     console.log('🔌 [VideoIngest] Initializing services...');
     
-    // 1. Init Pose Service
     const poseReady = await poseService.initialize();
-    
-    // 2. Init AI Brain (Fire and forget, it loads async)
     analysisService.initialize();
 
     if (!poseReady) {
@@ -38,26 +33,20 @@ class VideoIngestService {
     return true;
   }
 
-  /**
-   * Start the Loop
-   */
   startFrameLoop() {
     if (this.isActive || !this.videoElement) return;
     
     this.isActive = true;
-    videoIngest.isActive = true; // Update store
+    videoIngest.isActive = true; 
     videoIngest.isPlaying = true;
     
     console.log('▶️ [VideoIngest] Loop started.');
     this.loop();
   }
 
-  /**
-   * Stop the Loop
-   */
   stopFrameLoop() {
     this.isActive = false;
-    videoIngest.isActive = false; // Update store
+    videoIngest.isActive = false;
     videoIngest.isPlaying = false;
     
     if (this.animationFrameId) {
@@ -66,9 +55,6 @@ class VideoIngestService {
     }
   }
 
-  /**
-   * The Heartbeat
-   */
   private loop = () => {
     if (!this.isActive) return;
     this.animationFrameId = requestAnimationFrame(this.loop);
@@ -83,9 +69,6 @@ class VideoIngestService {
     }
   };
 
-  /**
-   * The Brain (Logic)
-   */
   private async processFrame() {
     if (!this.videoElement || !this.onFrame) return;
 
@@ -94,19 +77,23 @@ class VideoIngestService {
       // 1. Get Pose
       const result = await poseService.process(this.videoElement);
       
-      // 2. Run AI Analysis (Get 'PULL', 'LOCKOUT', etc.)
+      // 2. Run AI Analysis
       const currentPhase = await analysisService.process(result);
       
-      // 3. Update HUD Store
+      // 3. Update HUD Store (The Critical Wiring)
       if (currentPhase) {
+          // Debug log to confirm AI is firing (Check console if HUD stays '---')
+          if (overlay.phase !== currentPhase) {
+             console.log(`Update Phase: ${currentPhase}`); 
+          }
           overlay.phase = currentPhase;
       }
       
-      // 4. Update Telemetry Store
+      // 4. Update Telemetry
       videoIngest.actualFps = result.fps;
       videoIngest.frameCount++;
 
-      // 5. Draw to Canvas (Callback to UI)
+      // 5. Draw
       this.onFrame(result);
       
     } catch (err) {
@@ -117,7 +104,6 @@ class VideoIngestService {
   }
 }
 
-// Singleton Export
 let instance: VideoIngestService | null = null;
 
 export function getVideoIngestService(): VideoIngestService {

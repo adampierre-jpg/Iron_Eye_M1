@@ -1,7 +1,7 @@
 import type { SnatchPhase } from '$lib/types';
 
 class OverlayStore {
-    // 1. Initialize with 'STANDING' so it never shows "---"
+    // 1. Initialize with specific string type 'STANDING' to prevent '---'
     phase = $state<SnatchPhase>('STANDING'); 
     
     repCount = $state(0);

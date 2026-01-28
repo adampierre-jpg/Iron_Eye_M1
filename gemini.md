@@ -1,80 +1,123 @@
-Markdown
-
-# Iron Eye: Context & Handoff
+# Iron Eye — Project Context & Handoff
 
 ## 1. Project Identity
 * **Name:** Iron Eye (Kettlebell Snatch Analysis)
-* **Role:** Senior Full-Stack Engineer & CV Specialist
-* **Stack:** SvelteKit (Svelte 5 Runes), TypeScript, Tailwind/Custom CSS.
-* **Core Tech:** MediaPipe Pose (BlazePose), TensorFlow.js (1D CNN), Canvas API.
-* **Objective:** Mobile-first, edge-to-edge web tool for analyzing kettlebell snatch mechanics (velocity, phase, rep count).
+* **Objective:** Mobile-first, edge-to-edge web tool for analyzing kettlebell snatch mechanics (Phase, Velocity, Reps).
+* **Tech Stack:** SvelteKit (SPA Mode/SSR Disabled), Svelte 5 Runes, TypeScript, Tailwind.
+* **Core CV Stack:**
+    * **Pose:** `@mediapipe/pose` (BlazePose)
+    * **Inference:** `onnxruntime-web` (WASM)
+
+---
 
 ## 2. Status Board
-* **Milestone 1 (Foundation):** [COMPLETED]
-    * Video Ingest Service (rAF loop) operational.
-    * Double-layer rendering (Video + Canvas Overlay) synced.
-* **Milestone 2 (Kinematics & AI):** [IN PROGRESS]
-    * **Loop A (Pose Stream):** [COMPLETED]
-        * Integrated `@mediapipe/pose`.
-        * **Critical Fix:** Implemented "Aggressive Search" for MediaPipe constructor to handle Vite/UMD bundling issues.
-        * **Critical Fix:** Disabled SSR for Upload route (`export const ssr = false`) and added `browser` checks in services.
-        * Verified: Green skeleton overlays appear on video.
-    * **Loop B (Feature Builder):** [NEXT UP]
-        * Goal: Convert raw (x,y,z) tuples into normalized vectors.
-    * **Loop C (Model Inference):** [PENDING]
-        * Goal: Load TFJS model and output Phase Labels.
 
-## 3. Architecture Spec (M2)
-We are refactoring `src/lib` to separate "Services" (Hardware/External) from "Engine" (Pure Logic).
+### Milestone 1 (Foundation): ✅ COMPLETED
+* Video ingest loop (rAF) and Double-layer rendering (Video + Canvas) are stable.
+* Upload UI handles file input and playback control.
+* Server-Side Rendering (SSR) disabled to prevent 500 errors with browser-only libs.
 
-### Directory Structure
-```text
-src/lib/
-├── types/              # Domain interfaces (PoseResult, SnatchPhase)
-├── stores/
-│   ├── overlay.svelte.ts   # UI State
-│   └── telemetry.svelte.ts # High-freq stream (Velocity, Phase)
-├── services/           # Stateful Singletons
-│   ├── videoIngest.ts      # Main Loop Conductor
-│   ├── pose.ts             # MediaPipe Wrapper (Robust Import Logic)
-│   └── audio.ts            # Feedback cues
-└── engine/             # Pure Logic (No DOM)
-    ├── calibration.ts      # Pixels-to-Meters
-    ├── kinematics.ts       # Smoothing & Velocity Calc
-    ├── features.ts         # Vector Builder for Model (Next Task)
-    └── modelRunner.ts      # TFJS Inference
-4. Technical Constraints
-Svelte 5 Only: Use $state, $derived, $effect runes.
+### Milestone 2 (Kinematics & AI): ⚠️ IN FINAL INTEGRATION
+* **Loop A (Pose):** ✅ Green skeleton draws correctly on the canvas.
+* **Loop B (Features):** ✅ `FeatureBuilder` converts Keypoints → 12-point Vector.
+* **Loop C (Model):** ✅ ONNX model (`snatch_cnn_v4.onnx`) loads successfully.
+* **The Blocker:** The HUD displays `---` instead of the current phase.
+    * *Diagnosis:* The `overlay` store is likely initialized to `undefined`, and the wiring between `AnalysisService` and the store is disconnected.
 
-Performance:
+---
 
-Live Mode: Target 60fps.
+## 3. Architecture Overview
 
-Mobile-First: Use MediaPipe Pose (not Holistic).
+### Data Layer (Stores)
+* **`src/lib/stores/overlay.svelte.ts`**: Holds UI state (Phase, FPS, Velocity). **[FIX REQUIRED]**
+* **`src/lib/stores/videoIngest.svelte.ts`**: Holds playback state (Frame count, dropped frames).
 
-Bundling/SSR:
+### Service Layer (Orchestration)
+* **`src/lib/services/videoIngest.ts`**: The main loop. Calls Pose -> Analysis -> Updates Store. **[FIX REQUIRED]**
+* **`src/lib/services/analysis.ts`**: Wraps ONNX session. Manages the 36-frame rolling buffer.
+* **`src/lib/services/pose.ts`**: Wraps MediaPipe. Contains "Aggressive Search" fix for Vite imports.
 
-Always wrap AI libraries in await import(...) and check if (!browser).
+### Engine Layer (Pure Logic)
+* **`src/lib/engine/features.ts`**: Math engine (Angles/Velocities).
+* **`src/lib/engine/phaseClassifier.ts`**: ONNX inference logic.
+* **`src/lib/engine/viterbiDecoder.ts`**: State machine (Viterbi algorithm).
 
-Always inspect module keys for default exports when using UMD libraries in Vite.
+---
 
-5. Implementation Plan: Milestone 2
-Loop B: The Feature Builder (CURRENT)
-Goal: Convert skeletons to valid feature vectors for the 1D CNN.
+## 4. Immediate Action Plan (The Fix)
 
-Task 1: Implement src/lib/engine/features.ts.
+The goal for the next session is purely **Wiring**. We must connect the AI output to the UI Store.
 
-Logic: Center pose on Hips.
+### Step 1: Fix Store Initialization
+**File:** `src/lib/stores/overlay.svelte.ts`
+*Action:* Initialize `phase` with a string value to prevent `---`.
 
-Logic: Normalize scale based on Torso height.
+```typescript
+import type { SnatchPhase } from '$lib/types';
 
-Logic: Flatten to Float32Array.
+class OverlayStore {
+    // Initialize with 'STANDING' (String), NOT undefined
+    phase = $state<SnatchPhase>('STANDING'); 
+    
+    repCount = $state(0);
+    currentVelocity = $state(0);
+    peakVelocity = $state(0);
+    fps = $state(0);
+    alert = $state<{ message: string } | null>(null);
 
-...
-### Loop C (Model Inference): [IN PROGRESS]
-* **Engine:** ONNX Runtime Web (`ort`).
-* **Model:** `snatch_cnn_v4.onnx` (1D CNN).
-* **Decoder:** Viterbi (`viterbiDecoder.ts`).
-* **Status:** Files loaded. `FeatureBuilder` implemented.
-* **Next:** Wire `phaseClassifier.ts` into `videoIngest.ts`.
-...
+    reset() {
+        this.phase = 'STANDING';
+        this.repCount = 0;
+        this.currentVelocity = 0;
+        this.peakVelocity = 0;
+        this.alert = null;
+    }
+
+    updateFps(val: number) {
+        this.fps = val;
+    }
+}
+
+export const overlay = new OverlayStore();
+
+Step 2: Connect Data Pipeline
+File: src/lib/services/videoIngest.ts Action: Update processFrame to write the analysis result to the store.
+
+// ... imports
+import { overlay } from '$lib/stores'; // Ensure imported
+import { analysisService } from '$lib/services/analysis';
+// ...
+
+private async processFrame() {
+  if (!this.videoElement || !this.onFrame) return;
+
+  this.isProcessingFrame = true;
+  try {
+    // 1. Get Pose
+    const result = await poseService.process(this.videoElement);
+    
+    // 2. Run AI (Returns 'PULL', 'LOCKOUT', or null if buffering)
+    const currentPhase = await analysisService.process(result);
+    
+    // 3. WRITE TO STORE (The Critical Fix)
+    if (currentPhase) {
+        overlay.phase = currentPhase;
+    }
+    
+    // 4. Update Component & Telemetry
+    this.onFrame(result);
+    // ... update videoIngest stats ...
+    
+  } catch (err) {
+    console.error(err);
+  } finally {
+    this.isProcessingFrame = false;
+  }
+}
+
+Step 3: Verify Viterbi Return Type
+File: src/lib/engine/viterbiDecoder.ts Action: Ensure decodeLast returns a string from the PHASES array, not a number index.
+
+// ... inside decodeLast ...
+this.state = bestIdx;
+return PHASES[bestIdx]; // Return String, not Index
