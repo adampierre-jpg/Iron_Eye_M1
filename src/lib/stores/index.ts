@@ -1,3 +1,4 @@
+// src/lib/stores/index.ts
 // ============================================================
 // Iron Eye — Svelte Stores
 // ============================================================
@@ -17,7 +18,8 @@ import type {
   Alert,
   ConfidenceLevel,
   CalibrationQuality,
-  VideoIngestState
+  VideoIngestState,
+  PoseResult
 } from '$lib/types';
 
 // ============================================================
@@ -56,7 +58,7 @@ export const sessionConfig = createSessionConfigStore();
 
 const defaultCalibration: CalibrationData = {
   heightInches: 70, // 5'10" default
-  pxPerMeter: 0,
+  pxPerMeter: 0,    // Actually "Normalized Units per Meter"
   quality: 'none',
   sideLocked: false,
   side: null,
@@ -70,6 +72,45 @@ function createCalibrationStore() {
     subscribe,
     setHeight: (heightInches: number) => {
       update(c => ({ ...c, heightInches }));
+    },
+    // The "Subject as Ruler" Logic
+    calibrateFromPose: (pose: PoseResult) => {
+        update(c => {
+            const kp = pose.keypoints;
+            if (kp.length < 33) return c; // Safety
+
+            // 1. Get Measurements (Nose to Ankle)
+            // Nose = 0, Left Ankle = 27, Right Ankle = 28
+            const nose = kp[0];
+            const leftAnkle = kp[27];
+            const rightAnkle = kp[28];
+            
+            // Use average ankle height
+            const ankleY = (leftAnkle.y + rightAnkle.y) / 2;
+            const noseY = nose.y;
+            
+            // Normalized height (0.0 - 1.0 range)
+            const measuredHeightUnits = Math.abs(ankleY - noseY);
+            
+            // 2. Add Head Offset
+            // Nose-to-Ankle is roughly 90% of total height.
+            // Full Height = measured / 0.90
+            const fullBodyUnits = measuredHeightUnits / 0.90;
+
+            // 3. Convert User Height to Meters
+            const userHeightMeters = c.heightInches * 0.0254;
+
+            // 4. Calculate Scale: Units Per Meter
+            // e.g. If user is 1.8m and takes up 0.5 of screen, Scale = 0.5 / 1.8 = 0.277 units/m
+            const unitsPerMeter = fullBodyUnits / userHeightMeters;
+
+            return {
+                ...c,
+                pxPerMeter: unitsPerMeter,
+                quality: pose.confidence > 0.8 ? 'good' : 'ok',
+                timestamp: Date.now()
+            };
+        });
     },
     setPxPerMeter: (pxPerMeter: number, quality: CalibrationQuality) => {
       update(c => ({
@@ -135,7 +176,7 @@ import { telemetry } from './telemetry.svelte';
 export { videoIngest, telemetry };
 
 // ============================================================
-// Session Data Store (for summary/export)
+// Session Data Store
 // ============================================================
 
 const defaultSessionData: SessionData | null = null;
@@ -177,7 +218,6 @@ export const sessionData = createSessionDataStore();
 // Derived Stores
 // ============================================================
 
-// Combined calibration status
 export const calibrationStatus = derived(
   calibration,
   ($calibration) => ({
@@ -192,7 +232,6 @@ export const calibrationStatus = derived(
   })
 );
 
-// Side lock status for UI
 export const sideLockStatus = derived(
   calibration,
   ($calibration) => ({
@@ -203,6 +242,3 @@ export const sideLockStatus = derived(
       : 'Waiting...'
   })
 );
-
-
-;

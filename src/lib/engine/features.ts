@@ -1,5 +1,7 @@
 // src/lib/engine/features.ts
 import type { PoseResult, Keypoint } from '$lib/types';
+import { get } from 'svelte/store';
+import { calibration } from '$lib/stores';
 
 /**
  * Maps the 33 MediaPipe landmarks to the 12 features required by the CNN.
@@ -8,6 +10,7 @@ import type { PoseResult, Keypoint } from '$lib/types';
 export class FeatureBuilder {
   private lastPose: PoseResult | null = null;
   private lastTime: number = 0;
+  private lastScaleLogged: number = 0; // To prevent spamming console
 
   // Smoothing factors or thresholds could go here
   private readonly VELOCITY_THRESHOLD = 20.0; // Cap crazy spikes
@@ -20,12 +23,11 @@ export class FeatureBuilder {
     if (!pose || pose.keypoints.length === 0) return null;
 
     // 1. Determine Active Side (Simple heuristic if not provided)
-    // If side is null, assume Right (1.0) or use logic. 
-    // TODO: Connect to your "Side Lock" logic. 
-    const isRight = pose.side === 'LEFT' ? 0 : 1; // 0=Left, 1=Right (Model dependent)
+    const isRight = pose.side === 'LEFT' ? 0 : 1; 
     
     const kp = pose.keypoints;
     const idx = this.getIndices(isRight === 1);
+    
 
     // 2. Get Keypoints
     const shoulder = kp[idx.shoulder];
@@ -47,7 +49,16 @@ export class FeatureBuilder {
     const kneeAngle = this.calculateAngle(hip, knee, ankle);
 
     // 4. Calculate Velocities & Time Delta
-    // Normalize velocity by "User Height" (Heel to Nose) to make it invariant to camera distance
+    // Use the Calibration Store to get Units per Meter
+    const calib = get(calibration);
+    const unitsPerMeter = calib.pxPerMeter; // actually "Units per Meter"
+
+    // [DEBUG] Confirm Receipt of Calibration (Only log on change)
+    if (unitsPerMeter !== this.lastScaleLogged && unitsPerMeter > 0) {
+        console.log(`🏎️ [Velocity Tracker] Updated Scale: ${unitsPerMeter.toFixed(4)} units/m`);
+        this.lastScaleLogged = unitsPerMeter;
+    }
+
     const userHeightPx = Math.abs(kp[0].y - kp[isRight ? 30 : 29].y) || 1.0; 
     const dt = (pose.timestamp - this.lastTime) / 1000; // seconds
 
@@ -55,20 +66,26 @@ export class FeatureBuilder {
 
     if (this.lastPose && dt > 0 && dt < 1.0) {
        const prevKp = this.lastPose.keypoints;
-       const prevHeight = Math.abs(prevKp[0].y - prevKp[isRight ? 30 : 29].y) || 1.0;
        
-       // Velocity = (Current - Prev) / dt / HeightScale
-       // We use normalized Y (0-1), so dividing by height pixels isn't quite right.
-       // MediaPipe Y is % of screen. 
-       // Feature = (dY / dt) 
-       
+       // Calculate normalized displacement
        vElbow = this.getVelocity(elbow, prevKp[idx.elbow], dt);
        vShoulder = this.getVelocity(shoulder, prevKp[idx.shoulder], dt);
        vHip = this.getVelocity(hip, prevKp[idx.hip], dt);
        vKnee = this.getVelocity(knee, prevKp[idx.knee], dt);
        
-       // Specific feature: wrist_velocity_y (Vertical only)
-       vWristY = (-(wrist.y - prevKp[idx.wrist].y) / dt); // Negative because Y is down in CV
+       // --- VELOCITY PATH FIX ---
+       // wrist_velocity_y: Calculate in Meters/Second if calibrated
+       const dyUnits = wrist.y - prevKp[idx.wrist].y;
+       
+       if (unitsPerMeter > 0) {
+           // CALIBRATED: Convert to meters first
+           const dyMeters = dyUnits / unitsPerMeter;
+           vWristY = -(dyMeters / dt); // m/s (Negative because Y is down)
+       } else {
+           // UNCALIBRATED: Fallback to old "Units/sec" logic 
+           // (Or 1.0 scale to prevent huge numbers if dt is small)
+           vWristY = -(dyUnits / dt);
+       }
     }
 
     // 5. Special Features

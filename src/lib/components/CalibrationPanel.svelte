@@ -1,10 +1,6 @@
-<!--
-  CalibrationPanel Component
-  Height input + calibration quality indicator + confirm button
--->
-
 <script lang="ts">
   import { calibration, calibrationStatus } from '$lib/stores';
+  import { poseService } from '$lib/services/pose'; // Import Service
   import type { CalibrationQuality } from '$lib/types';
   
   // Props
@@ -29,10 +25,19 @@
   // Handle confirm
   function handleConfirm() {
     updateHeight();
-    // For M1, we'll simulate calibration quality based on height being set
-    // Real calibration quality would come from pose detection in later milestones
-    calibration.setPxPerMeter(500, 'ok'); // Placeholder
-    onConfirm?.();
+
+    // 1. Get the current pose from the service
+    const currentPose = poseService.getLastResult();
+
+    if (currentPose && currentPose.keypoints.length > 0) {
+        // 2. Perform math in the store
+        calibration.calibrateFromPose(currentPose);
+        onConfirm?.();
+    } else {
+        // Fallback or Alert (Ideally use a Toast)
+        console.warn("⚠️ Cannot calibrate: No pose detected.");
+        alert("Please stand clearly in the frame to calibrate.");
+    }
   }
   
   // Quality indicator colors
@@ -86,7 +91,7 @@
       </div>
     </div>
     <p class="height-hint">
-      Used to calculate velocity in meters/second
+      Stand in frame and click Confirm to calibrate velocity.
     </p>
   </div>
   

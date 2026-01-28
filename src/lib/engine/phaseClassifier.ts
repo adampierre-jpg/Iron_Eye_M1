@@ -94,7 +94,7 @@ export class PhaseClassifier {
       const logits = results[outputName].data as Float32Array;
 
       // 5. Decode
-      return viterbiDecoder.decodeLast(logits, T);
+     return viterbiDecoder.decodeLast(logits, 1); // Only 1 step of logits provided
 
     } catch (e) {
       console.error('❌ [Classifier] Inference error:', e);

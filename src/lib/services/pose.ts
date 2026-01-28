@@ -1,12 +1,13 @@
 // src/lib/services/pose.ts
 import { browser } from '$app/environment';
-import type { Results } from '@mediapipe/pose'; // Type-only import is safe
+import type { Results } from '@mediapipe/pose'; 
 import type { PoseResult, Keypoint } from '$lib/types';
 
 class PoseDetectorService {
   private detector: any = null;
   private isReady = false;
   private lastFrameTime = 0;
+  private lastResult: PoseResult | null = null; // Stored for calibration access
 
   async initialize(): Promise<boolean> {
     if (!browser) return false;
@@ -16,26 +17,17 @@ class PoseDetectorService {
       console.log('⏳ [PoseService] Loading MediaPipe dynamically...');
       
       const mpModule = await import('@mediapipe/pose');
-      console.log('📦 [PoseService] Keys:', Object.keys(mpModule)); // Debugging aid
-
-      // AGGRESSIVE SEARCH STRATEGY
-      // 1. Check Standard Named Export
-      let PoseConstructor = mpModule.Pose;
       
-      // 2. Check Default Export (CommonJS Interop)
+      let PoseConstructor = mpModule.Pose;
       if (!PoseConstructor && (mpModule as any).default) {
         PoseConstructor = (mpModule as any).default.Pose || (mpModule as any).default;
       }
-
-      // 3. Fallback: Check Global Scope (Window)
-      // Sometimes Vite puts it on window.Pose or window.MediaPipe
       if (!PoseConstructor && (window as any).Pose) {
-         console.warn('⚠️ [PoseService] Found Pose on window object.');
          PoseConstructor = (window as any).Pose;
       }
 
       if (!PoseConstructor) {
-        throw new Error(`Could not find "Pose" constructor. Available keys: ${Object.keys(mpModule).join(', ')}`);
+        throw new Error(`Could not find "Pose" constructor.`);
       }
 
       this.detector = new PoseConstructor({
@@ -60,18 +52,25 @@ class PoseDetectorService {
     }
   }
 
-  // ... rest of the file (process, normalizeResults, getEmptyResult) remains identical ...
-  // (Paste the existing process/normalize logic here)
-
   async process(input: HTMLVideoElement): Promise<PoseResult> {
     if (!this.detector || !this.isReady) return this.getEmptyResult();
     
     return new Promise((resolve) => {
       this.detector.onResults((results: Results) => {
-        resolve(this.normalizeResults(results));
+        const processed = this.normalizeResults(results);
+        this.lastResult = processed; // Store for synchronous access
+        resolve(processed);
       });
       this.detector.send({ image: input });
     });
+  }
+
+  /**
+   * Helper for UI components (like Calibration) to grab the latest data 
+   * without waiting for the next frame loop.
+   */
+  getLastResult(): PoseResult | null {
+    return this.lastResult;
   }
 
   private normalizeResults(results: Results): PoseResult {
@@ -85,12 +84,15 @@ class PoseDetectorService {
           x: lm.x, y: lm.y, z: lm.z, score: lm.visibility || 0
         })) 
       : [];
-
+    
+    // TODO: Implement robust Side Detection here later
+    // For now, we return null and let FeatureBuilder default to Right
+    
     return {
       timestamp: now,
       keypoints,
       worldLandmarks: [],
-      side: null,
+      side: null, 
       isHandOnBell: false,
       fps: Math.round(instantaneousFps),
       confidence: keypoints[0]?.score || 0
