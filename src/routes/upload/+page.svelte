@@ -1,21 +1,21 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { goto } from '$app/navigation';
-  
   // Services
   import { 
     getVideoIngestService, 
     destroyVideoIngestService 
   } from '$lib/services/videoIngest';
+  import { poseService } from '$lib/services/pose';       // ✅ Added for manual static capture
+  import { analysisService } from '$lib/services/analysis'; // ✅ Added for manual static capture
 
   // Stores
   import {
     calibration,
-    overlay,     // Ensure this is your Svelte 5 reactive store
+    overlay,
     videoIngest,
     sideLockStatus
   } from '$lib/stores';
-
   // Types
   import type { SnatchPhase, PoseResult } from '$lib/types';
   import { CalibrationPanel } from '$lib/components';
@@ -40,7 +40,7 @@
 
   // --- STATE (Runes) ---
 
-  // DOM Bindings (No $state needed for bindings in Svelte 5)
+  // DOM Bindings
   let videoElement: HTMLVideoElement;
   let canvasElement: HTMLCanvasElement;
   let fileInput: HTMLInputElement;
@@ -52,8 +52,8 @@
   let isDragOver = $state(false);
   let isVideoLoaded = $state(false);
   let isCalibrated = $state(false);
-  let isProcessing = $state(false);
-  let showDebug = $state(false);
+  let isProcessing = $state(false); 
+  // removed showDebug (Always on)
 
   // Service Reference
   let videoService = getVideoIngestService();
@@ -68,34 +68,57 @@
     
     // Cleanup previous URL
     if (videoUrl) URL.revokeObjectURL(videoUrl);
-    
+
     // Reset State
     videoFile = file;
     videoUrl = URL.createObjectURL(file);
     isVideoLoaded = false;
     isProcessing = false;
-    
-    // Reset Stores
-    // overlay.reset(); // Uncomment if your store has a reset method
+    // overlay.reset(); 
   }
 
-  function handleVideoLoaded() {
+  async function handleVideoLoaded() {
     if (!videoElement || !videoFile) return;
     isVideoLoaded = true;
     console.log(`[Upload] Loaded: ${videoFile.name} (${videoElement.videoWidth}x${videoElement.videoHeight})`);
     
-    // Initialize the service with the video element and our frame callback
-    videoService.initialize(videoElement, handleFrame);
+    // 1. Initialize the service (Connects Pose & Analysis)
+    await videoService.initialize(videoElement, handleFrame);
+
+    // 2. Start the Loop IMMEDIATELY (It will sit idle while paused, but activate on play/scrub)
+    videoService.startFrameLoop();
+
+    // 3. Manual Static Capture (Force skeleton on the first frame/thumbnail)
+    try {
+        const initialPose = await poseService.process(videoElement);
+        if (initialPose) {
+            // Update Brain
+            const initialPhase = await analysisService.process(initialPose);
+            overlay.phase = initialPhase;
+            
+            // Update Face (Draw Static Skeleton)
+            if (canvasElement) {
+                canvasElement.width = videoElement.videoWidth;
+                canvasElement.height = videoElement.videoHeight;
+                const ctx = canvasElement.getContext('2d');
+                if (ctx) {
+                    ctx.drawImage(videoElement, 0, 0);
+                    drawSkeleton(ctx, initialPose);
+                }
+            }
+        }
+    } catch (err) {
+        console.warn('Could not render initial frame:', err);
+    }
   }
 
   /**
    * THE LOOP: Called ~60 times per second by videoIngest.ts
    */
   function handleFrame(poseResult: PoseResult) {
-    // 1. Update Telemetry (Using the new PoseResult from M2)
-    // Assuming 'overlay' store can accept these updates:
+    // 1. Update Telemetry
     overlay.fps = poseResult.fps;
-    
+
     // 2. Render to Canvas
     if (canvasElement && videoElement) {
       const ctx = canvasElement.getContext('2d');
@@ -109,21 +132,17 @@
         // A. Draw the video frame
         ctx.drawImage(videoElement, 0, 0);
 
-        // B. Draw Skeleton (Milestone 2 Visuals)
-        if (showDebug) {
-          drawSkeleton(ctx, poseResult);
-        }
+        // B. Draw Skeleton (ALWAYS ON)
+        drawSkeleton(ctx, poseResult);
       }
     }
   }
 
-  // Simple debug drawer for immediate feedback
   function drawSkeleton(ctx: CanvasRenderingContext2D, result: PoseResult) {
     ctx.fillStyle = '#00ff00';
     for (const kp of result.keypoints) {
       if (kp.score > 0.5) {
         ctx.beginPath();
-        // x, y are normalized (0-1), so multiply by width/height
         ctx.arc(kp.x * ctx.canvas.width, kp.y * ctx.canvas.height, 4, 0, 2 * Math.PI);
         ctx.fill();
       }
@@ -133,13 +152,13 @@
   function handleStartProcessing() {
     if (!isCalibrated) return;
     isProcessing = true;
-    videoService.startFrameLoop();
+    // videoService.startFrameLoop(); // Already started in handleVideoLoaded
     videoElement?.play();
   }
 
   function handleStopProcessing() {
     isProcessing = false;
-    videoService.stopFrameLoop();
+    // videoService.stopFrameLoop(); // Don't stop loop, just pause video so we can still scrub
     videoElement?.pause();
   }
 
@@ -215,7 +234,7 @@
             playsinline
             loop
             muted
-            controls={!isProcessing}
+            controls={!isProcessing} 
             onloadedmetadata={handleVideoLoaded}
             class="upload-video"
           ></video>
@@ -223,7 +242,6 @@
           <canvas
             bind:this={canvasElement}
             class="upload-canvas"
-            class:hidden={!isProcessing}
           ></canvas>
         </div>
         
@@ -237,7 +255,7 @@
         {/if}
       </div>
 
-      {#if isProcessing}
+      {#if isVideoLoaded}
         <div class="stats-panel">
           <div class="stat-item">
             <span class="stat-label">Phase</span>
@@ -255,12 +273,10 @@
             <span class="stat-label">Velocity</span>
             <span class="stat-value">{formatVelocity(overlay.currentVelocity ?? 0)} m/s</span>
           </div>
-          {#if showDebug}
-            <div class="stat-item">
-              <span class="stat-label">FPS</span>
-              <span class="stat-value">{overlay.fps}</span>
-            </div>
-          {/if}
+          <div class="stat-item">
+             <span class="stat-label">FPS</span>
+             <span class="stat-value">{overlay.fps}</span>
+          </div>
         </div>
       {/if}
 
@@ -306,20 +322,13 @@
             New Video
           </button>
         </div>
-
-        <div class="panel-section debug-section">
-          <label class="debug-label">
-            <input type="checkbox" bind:checked={showDebug} />
-            <span>Show Debug HUD & Skeleton</span>
-          </label>
-        </div>
       </div>
     {/if}
   </div>
 </main>
 
 <style>
-  /* Kept your existing CSS, just ensured variables match app.css */
+  /* Same styles as before */
   .upload-screen {
     min-height: 100vh;
     min-height: 100dvh;
@@ -398,13 +407,15 @@
   }
   .upload-video {
     position: absolute;
-    top: 0; left: 0; width: 100%; height: 100%;
+    top: 0; left: 0; width: 100%;
+    height: 100%;
     object-fit: contain;
     background: black;
   }
   .upload-canvas {
     position: absolute;
-    top: 0; left: 0; width: 100%; height: 100%;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
     object-fit: contain;
     pointer-events: none;
     z-index: 10;
@@ -454,7 +465,4 @@
   .btn-secondary:hover { border-color: var(--color-white); }
   .btn-ghost { background: transparent; color: var(--color-muted); padding: var(--space-2); }
   .btn-ghost:hover { color: var(--color-white); }
-
-  .debug-section { padding: var(--space-3); }
-  .debug-label { display: flex; align-items: center; gap: var(--space-2); color: var(--color-muted); cursor: pointer; }
 </style>
