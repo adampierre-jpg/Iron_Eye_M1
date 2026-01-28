@@ -1,13 +1,17 @@
 import * as ort from 'onnxruntime-web';
 import { viterbiDecoder, type SnatchPhase } from './viterbiDecoder';
 
+// Point ONNX to the root (where we copied the .wasm and .mjs files)
+ort.env.wasm.wasmPaths = "/"; 
 ort.env.wasm.numThreads = 1;
 ort.env.wasm.simd = true;
 
+// --- UPDATED INTERFACE TO MATCH YOUR JSON ---
 interface Config {
-  sequence_length: number; // 36
-  num_features: number;    // 12
-  model_version: string;
+  model: {
+    frame_window: number; // Was 'sequence_length'
+    feature_dim: number;  // Was 'num_features'
+  };
 }
 
 export class PhaseClassifier {
@@ -17,7 +21,7 @@ export class PhaseClassifier {
   private bufIdx = 0;
 
   constructor() {
-    // Pre-allocate buffer (Max size assumption or resize later)
+    // Pre-allocate buffer (Max size assumption: 100 * 12)
     this.buffer = new Float32Array(100 * 12); 
   }
 
@@ -30,9 +34,10 @@ export class PhaseClassifier {
         executionProviders: ['wasm'],
       });
       
-      // Resize buffer to exact model dimensions
+      // Resize buffer to exact model dimensions if config is loaded
       if (this.config) {
-         this.buffer = new Float32Array(this.config.sequence_length * this.config.num_features);
+         const { frame_window, feature_dim } = this.config.model;
+         this.buffer = new Float32Array(frame_window * feature_dim);
       }
 
       console.log('✅ [Classifier] Loaded. Input Name:', this.session.inputNames[0]);
@@ -43,7 +48,10 @@ export class PhaseClassifier {
 
   addFrame(features: number[]): void {
     if (!this.config) return;
-    const { sequence_length: T, num_features: F } = this.config;
+    
+    // --- UPDATED ACCESSORS ---
+    const T = this.config.model.frame_window;
+    const F = this.config.model.feature_dim;
 
     // Rolling Buffer Logic: Shift Left, Append Right
     if (this.bufIdx >= T) {
@@ -61,22 +69,21 @@ export class PhaseClassifier {
   async classify(): Promise<SnatchPhase | null> {
     if (!this.session || !this.config) return null;
     
-    const { sequence_length: T, num_features: F } = this.config;
+    // --- UPDATED ACCESSORS ---
+    const T = this.config.model.frame_window;
+    const F = this.config.model.feature_dim;
 
-    // 1. Wait for Buffer to Fill (Crucial!)
-    // The model needs 36 frames of context before it can speak.
+    // 1. Wait for Buffer to Fill
     if (this.bufIdx < T) {
-       // Optional: console.debug(`[Classifier] Buffering... ${this.bufIdx}/${T}`);
        return null;
     }
 
     try {
       // 2. Prepare Tensor
-      // Shape must be [1, T, F] -> [1, 36, 12]
+      // Shape is [1, T, F] (e.g., [1, 36, 12])
       const inputTensor = new ort.Tensor('float32', this.buffer, [1, T, F]);
       
-      // 3. Run Inference (Dynamic Input Name)
-      // We read the input name directly from the loaded session
+      // 3. Run Inference
       const inputName = this.session.inputNames[0]; 
       const feeds = { [inputName]: inputTensor };
       
@@ -87,7 +94,6 @@ export class PhaseClassifier {
       const logits = results[outputName].data as Float32Array;
 
       // 5. Decode
-      // We only care about the *last* frame's prediction in the sequence
       return viterbiDecoder.decodeLast(logits, T);
 
     } catch (e) {
