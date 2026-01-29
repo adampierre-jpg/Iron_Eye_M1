@@ -7,10 +7,11 @@ import type { PoseResult } from '$lib/types';
 
 type FrameCallback = (result: PoseResult) => void;
 
-// Add this interface to match what +page.svelte is sending
 interface VideoOptions {
     targetFps?: number;
     facingMode?: 'user' | 'environment';
+    // ✅ NEW: Explicitly define the source. Default is 'camera'.
+    inputType?: 'camera' | 'file'; 
 }
 
 class VideoIngestService {
@@ -19,9 +20,8 @@ class VideoIngestService {
   private animationFrameId: number | null = null;
   private isProcessingFrame = false;
   private isActive = false;
-  private stream: MediaStream | null = null; // Track the stream to clean up later
+  private stream: MediaStream | null = null; 
 
-  // Updated signature to accept Options
   async initialize(
       video: HTMLVideoElement, 
       callback: FrameCallback, 
@@ -32,37 +32,45 @@ class VideoIngestService {
     this.videoElement = video;
     this.onFrame = callback;
 
-    console.log('🔌 [VideoIngest] Starting Ignition...');
+    const inputType = options.inputType || 'camera'; // Default to camera
+    console.log(`🔌 [VideoIngest] Starting Ignition. Mode: ${inputType}`);
 
     try {
-        // 1. IGNITION: Get Camera Stream
-        // Use 'environment' (rear) by default for kettlebells, 'user' for testing
-        const mode = options.facingMode || 'environment'; 
-        
-        this.stream = await navigator.mediaDevices.getUserMedia({
-            audio: false,
-            video: {
-                facingMode: mode,
-                width: { ideal: 1280 },
-                height: { ideal: 720 },
-                frameRate: { ideal: options.targetFps || 60 }
-            }
-        });
+        if (inputType === 'camera') {
+            // --- CAMERA PATH ---
+            // 1. IGNITION: Get Camera Stream
+            const mode = options.facingMode || 'environment'; 
+            
+            this.stream = await navigator.mediaDevices.getUserMedia({
+                audio: false,
+                video: {
+                    facingMode: mode,
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 },
+                    frameRate: { ideal: options.targetFps || 60 }
+                }
+            });
 
-        // 2. Attach Stream to Video Element
-        this.videoElement.srcObject = this.stream;
-        
-        // Wait for video to actually be ready
-        await new Promise<void>((resolve) => {
-            if (!this.videoElement) return resolve();
-            this.videoElement.onloadedmetadata = () => {
-                this.videoElement?.play().then(() => resolve());
-            };
-        });
+            // 2. Attach Stream to Video Element
+            this.videoElement.srcObject = this.stream;
+            
+            // Wait for video to actually be ready
+            await new Promise<void>((resolve) => {
+                if (!this.videoElement) return resolve();
+                this.videoElement.onloadedmetadata = () => {
+                    this.videoElement?.play().then(() => resolve());
+                };
+            });
+            console.log('📸 [VideoIngest] Camera rolling.');
 
-        console.log('📸 [VideoIngest] Camera rolling.');
+        } else {
+            // --- FILE PATH ---
+            // Do NOT touch srcObject. The Upload page manages the file source.
+            // We just verify the element exists.
+            console.log('📂 [VideoIngest] File source detected. Skipping camera request.');
+        }
 
-        // 3. Initialize AI Services
+        // 3. Initialize AI Services (Shared)
         const poseReady = await poseService.initialize();
         analysisService.initialize();
 
@@ -74,7 +82,7 @@ class VideoIngestService {
         return true;
 
     } catch (err) {
-        console.error('❌ [VideoIngest] Camera permission denied or error:', err);
+        console.error('❌ [VideoIngest] Initialization error:', err);
         return false;
     }
   }
@@ -100,13 +108,14 @@ class VideoIngestService {
       this.animationFrameId = null;
     }
 
-    // Stop the camera stream to release the hardware light
+    // Only stop stream if we actually own one (Camera Mode)
     if (this.stream) {
         this.stream.getTracks().forEach(track => track.stop());
         this.stream = null;
     }
   }
 
+  // ... (Remainder of the file: loop, processFrame, singleton export remain unchanged) ...
   private loop = () => {
     if (!this.isActive) return;
     this.animationFrameId = requestAnimationFrame(this.loop);
@@ -116,6 +125,7 @@ class VideoIngestService {
       return;
     }
 
+    // Only process if video is actually playing/ready
     if (this.videoElement && !this.videoElement.paused && !this.videoElement.ended) {
       this.processFrame();
     }
@@ -126,25 +136,16 @@ class VideoIngestService {
 
     this.isProcessingFrame = true;
     try {
-      // 1. Get Pose
       const result = await poseService.process(this.videoElement);
-      
-      // 2. Run AI Analysis
       const currentPhase = await analysisService.process(result);
       
-      // 3. Update HUD Store
       if (currentPhase) {
-          if (overlay.phase !== currentPhase) {
-             // console.log(`Update Phase: ${currentPhase}`); 
-          }
           overlay.phase = currentPhase;
       }
       
-      // 4. Update Telemetry
       videoIngest.actualFps = result.fps;
       videoIngest.frameCount++;
 
-      // 5. Draw
       this.onFrame(result);
       
     } catch (err) {

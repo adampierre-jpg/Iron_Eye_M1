@@ -6,22 +6,21 @@
     getVideoIngestService, 
     destroyVideoIngestService 
   } from '$lib/services/videoIngest';
-  import { poseService } from '$lib/services/pose';       // ✅ Added for manual static capture
-  import { analysisService } from '$lib/services/analysis'; // ✅ Added for manual static capture
-
+  import { poseService } from '$lib/services/pose';       
+  import { analysisService } from '$lib/services/analysis';
+  
   // Stores
- // Stores
   import {
     calibration,
     videoIngest,
     sideLockStatus
   } from '$lib/stores';
-  
-  // ✅ Import from the new Rune store
   import { overlay } from '$lib/stores/overlay.svelte';
+  
   // Types
   import type { SnatchPhase, PoseResult } from '$lib/types';
-  import { CalibrationPanel } from '$lib/components';
+  // Remove CalibrationPanel import if not used elsewhere, or keep for other routes
+  // import { CalibrationPanel } from '$lib/components'; 
 
   // --- CONFIG ---
 
@@ -51,12 +50,14 @@
   // Local Reactive State
   let videoFile = $state<File | null>(null);
   let videoUrl = $state<string | null>(null);
-  
   let isDragOver = $state(false);
   let isVideoLoaded = $state(false);
   let isCalibrated = $state(false);
-  let isProcessing = $state(false); 
-  // removed showDebug (Always on)
+  let isProcessing = $state(false);
+  
+  // Manual Calibration State
+  let feet = $state(5); // Default to generic height
+  let inches = $state(10); 
 
   // Service Reference
   let videoService = getVideoIngestService();
@@ -77,7 +78,7 @@
     videoUrl = URL.createObjectURL(file);
     isVideoLoaded = false;
     isProcessing = false;
-    // overlay.reset(); 
+    isCalibrated = false; // Reset calibration on new file
   }
 
   async function handleVideoLoaded() {
@@ -85,21 +86,19 @@
     isVideoLoaded = true;
     console.log(`[Upload] Loaded: ${videoFile.name} (${videoElement.videoWidth}x${videoElement.videoHeight})`);
     
-    // 1. Initialize the service (Connects Pose & Analysis)
-    await videoService.initialize(videoElement, handleFrame);
-
-    // 2. Start the Loop IMMEDIATELY (It will sit idle while paused, but activate on play/scrub)
+    // 1. Initialize the service in FILE mode (prevents camera takeover)
+    await videoService.initialize(videoElement, handleFrame, { inputType: 'file' });
+    
+    // 2. Start the Loop (it will idle if paused)
     videoService.startFrameLoop();
 
-    // 3. Manual Static Capture (Force skeleton on the first frame/thumbnail)
+    // 3. Manual Static Capture (Draw skeleton on first frame)
     try {
         const initialPose = await poseService.process(videoElement);
         if (initialPose) {
-            // Update Brain
             const initialPhase = await analysisService.process(initialPose);
             overlay.phase = initialPhase;
             
-            // Update Face (Draw Static Skeleton)
             if (canvasElement) {
                 canvasElement.width = videoElement.videoWidth;
                 canvasElement.height = videoElement.videoHeight;
@@ -115,27 +114,45 @@
     }
   }
 
+  // ✅ NEW: Manual Calibration Handler
+  async function handleManualCalibration() {
+    if (!videoElement) return;
+
+    // 1. Force process the CURRENT frame (even if video is paused)
+    // The loop might skip paused frames, so we explicitly ask for this one.
+    const currentPose = await poseService.process(videoElement);
+
+    if (!currentPose || currentPose.keypoints.length === 0) {
+        alert("No body detected! Please scrub to a frame where you are visible.");
+        return;
+    }
+
+    // 2. Set Height in Store
+    const totalInches = (feet * 12) + inches;
+    calibration.setHeight(totalInches);
+
+    // 3. Calibrate Metrics using the detected pose
+    calibration.calibrateFromPose(currentPose);
+    
+    // 4. Unlock UI
+    isCalibrated = true;
+    console.log(`[Upload] Calibrated at ${totalInches}" using manual frame.`);
+  }
+
   /**
    * THE LOOP: Called ~60 times per second by videoIngest.ts
    */
   function handleFrame(poseResult: PoseResult) {
-    // 1. Update Telemetry
     overlay.fps = poseResult.fps;
-
-    // 2. Render to Canvas
+    
     if (canvasElement && videoElement) {
       const ctx = canvasElement.getContext('2d');
       if (ctx) {
-        // Sync canvas to video size
         if (canvasElement.width !== videoElement.videoWidth) {
           canvasElement.width = videoElement.videoWidth;
           canvasElement.height = videoElement.videoHeight;
         }
-
-        // A. Draw the video frame
         ctx.drawImage(videoElement, 0, 0);
-
-        // B. Draw Skeleton (ALWAYS ON)
         drawSkeleton(ctx, poseResult);
       }
     }
@@ -155,13 +172,11 @@
   function handleStartProcessing() {
     if (!isCalibrated) return;
     isProcessing = true;
-    // videoService.startFrameLoop(); // Already started in handleVideoLoaded
     videoElement?.play();
   }
 
   function handleStopProcessing() {
     isProcessing = false;
-    // videoService.stopFrameLoop(); // Don't stop loop, just pause video so we can still scrub
     videoElement?.pause();
   }
 
@@ -212,9 +227,7 @@
           <polyline points="17 8 12 3 7 8"/>
           <line x1="12" y1="3" x2="12" y2="15"/>
         </svg>
-        <p class="upload-text">
-          <strong>Drop video here</strong><br />or click to browse
-        </p>
+        <p class="upload-text"><strong>Drop video here</strong><br />or click to browse</p>
         <p class="upload-hint">MP4, MOV, WebM supported</p>
         <input 
           type="file"
@@ -251,9 +264,7 @@
         {#if isVideoLoaded}
           <div class="video-info">
             <span class="video-filename">{videoFile?.name}</span>
-            <span class="video-dimensions">
-              {videoElement?.videoWidth}×{videoElement?.videoHeight}
-            </span>
+            <span class="video-dimensions">{videoElement?.videoWidth}×{videoElement?.videoHeight}</span>
           </div>
         {/if}
       </div>
@@ -286,13 +297,30 @@
       <div class="control-panel">
         {#if !isCalibrated}
           <div class="panel-section">
-            <CalibrationPanel compact={true} onConfirm={() => isCalibrated = true} />
+            <div class="manual-calibration">
+                <h3>Calibration</h3>
+                <p class="hint">Enter height and click to calibrate on the current frame.</p>
+                
+                <div class="height-inputs">
+                    <div class="input-group">
+                        <input type="number" bind:value={feet} min="3" max="8" />
+                        <span>ft</span>
+                    </div>
+                    <div class="input-group">
+                        <input type="number" bind:value={inches} min="0" max="11" />
+                        <span>in</span>
+                    </div>
+                    <button class="btn btn-primary" onclick={handleManualCalibration}>
+                        Confirm
+                    </button>
+                </div>
+            </div>
           </div>
         {:else}
           <div class="panel-section calibrated">
             <div class="calibration-status">
               <span class="status-dot active"></span>
-              <span>Calibrated — {calibration.heightInches}″</span>
+              <span>Calibrated — {$calibration.heightInches}″</span>
             </div>
             <button class="btn btn-ghost btn-sm" onclick={() => isCalibrated = false}>
               Recalibrate
@@ -331,7 +359,7 @@
 </main>
 
 <style>
-  /* Same styles as before */
+  /* Base styles inherited from previous version */
   .upload-screen {
     min-height: 100vh;
     min-height: 100dvh;
@@ -423,7 +451,6 @@
     pointer-events: none;
     z-index: 10;
   }
-  .hidden { display: none; }
   .video-info { display: flex; justify-content: space-between; padding: 0 var(--space-2); color: var(--color-muted); font-size: var(--font-size-sm); }
 
   /* Stats */
@@ -449,8 +476,19 @@
   .panel-section.calibrated { display: flex; justify-content: space-between; align-items: center; }
   .calibration-status { display: flex; align-items: center; gap: var(--space-2); color: var(--color-copper); }
   .status-dot { width: 8px; height: 8px; border-radius: 50%; background-color: var(--color-copper); }
-  .panel-section:not(.calibrated) { display: flex; flex-direction: column; gap: var(--space-3); }
   
+  /* ✅ NEW: Manual Calibration Styles */
+  .manual-calibration h3 { color: var(--color-copper); font-size: var(--font-size-md); font-weight: bold; margin-bottom: var(--space-2); }
+  .manual-calibration .hint { color: var(--color-muted); font-size: var(--font-size-sm); margin-bottom: var(--space-4); }
+  .height-inputs { display: flex; gap: var(--space-3); align-items: center; }
+  .input-group { display: flex; align-items: center; gap: var(--space-2); }
+  .input-group input {
+    background: var(--color-black); border: 1px solid var(--color-black-lighter);
+    color: var(--color-white); padding: var(--space-2); border-radius: var(--radius-sm);
+    width: 60px; text-align: center; font-weight: bold;
+  }
+  .input-group span { color: var(--color-muted); font-size: var(--font-size-sm); }
+
   /* Buttons */
   .btn {
     padding: var(--space-3);
