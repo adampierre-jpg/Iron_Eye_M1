@@ -8,17 +8,12 @@ import type {
   SessionConfig,
   SessionData,
   CalibrationData,
-  OverlayState,
   UIState,
   Screen,
   Movement,
   SessionMode,
-  SnatchPhase,
   Side,
-  Alert,
-  ConfidenceLevel,
   CalibrationQuality,
-  VideoIngestState,
   PoseResult
 } from '$lib/types';
 
@@ -170,10 +165,15 @@ function createUIStore() {
 
 export const ui = createUIStore();
 
+// ============================================================
+// Rune Stores (Svelte 5)
+// ============================================================
+
 import { videoIngest } from './videoIngest.svelte';
 import { telemetry } from './telemetry.svelte';
+import { overlay } from './overlay.svelte'; // ✅ ADDED THIS
 
-export { videoIngest, telemetry };
+export { videoIngest, telemetry, overlay }; // ✅ EXPORTED THIS
 
 // ============================================================
 // Session Data Store

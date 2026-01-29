@@ -4,6 +4,7 @@
 		"src/routes/+layout.ts"
 	],
 	"/live": [
+		"src/routes/live/+page.ts",
 		"src/routes/+layout.ts"
 	],
 	"/summary": [

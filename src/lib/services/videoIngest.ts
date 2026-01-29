@@ -1,11 +1,17 @@
 // src/lib/services/videoIngest.ts
-import { overlay } from '$lib/stores/overlay.svelte'; // ✅ DIRECT IMPORT
-import { videoIngest } from '$lib/stores/videoIngest.svelte'; // ✅ DIRECT IMPORT
+import { overlay } from '$lib/stores/overlay.svelte'; 
+import { videoIngest } from '$lib/stores/videoIngest.svelte'; 
 import { poseService } from '$lib/services/pose';
 import { analysisService } from '$lib/services/analysis';
 import type { PoseResult } from '$lib/types';
 
 type FrameCallback = (result: PoseResult) => void;
+
+// Add this interface to match what +page.svelte is sending
+interface VideoOptions {
+    targetFps?: number;
+    facingMode?: 'user' | 'environment';
+}
 
 class VideoIngestService {
   private videoElement: HTMLVideoElement | null = null;
@@ -13,24 +19,64 @@ class VideoIngestService {
   private animationFrameId: number | null = null;
   private isProcessingFrame = false;
   private isActive = false;
+  private stream: MediaStream | null = null; // Track the stream to clean up later
 
-  async initialize(video: HTMLVideoElement, callback: FrameCallback): Promise<boolean> {
+  // Updated signature to accept Options
+  async initialize(
+      video: HTMLVideoElement, 
+      callback: FrameCallback, 
+      options: VideoOptions = {}
+  ): Promise<boolean> {
     if (!video) return false;
 
     this.videoElement = video;
     this.onFrame = callback;
 
-    console.log('🔌 [VideoIngest] Initializing services...');
-    
-    const poseReady = await poseService.initialize();
-    analysisService.initialize();
+    console.log('🔌 [VideoIngest] Starting Ignition...');
 
-    if (!poseReady) {
-      console.error('❌ [VideoIngest] PoseService failed.');
-      return false;
+    try {
+        // 1. IGNITION: Get Camera Stream
+        // Use 'environment' (rear) by default for kettlebells, 'user' for testing
+        const mode = options.facingMode || 'environment'; 
+        
+        this.stream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: {
+                facingMode: mode,
+                width: { ideal: 1280 },
+                height: { ideal: 720 },
+                frameRate: { ideal: options.targetFps || 60 }
+            }
+        });
+
+        // 2. Attach Stream to Video Element
+        this.videoElement.srcObject = this.stream;
+        
+        // Wait for video to actually be ready
+        await new Promise<void>((resolve) => {
+            if (!this.videoElement) return resolve();
+            this.videoElement.onloadedmetadata = () => {
+                this.videoElement?.play().then(() => resolve());
+            };
+        });
+
+        console.log('📸 [VideoIngest] Camera rolling.');
+
+        // 3. Initialize AI Services
+        const poseReady = await poseService.initialize();
+        analysisService.initialize();
+
+        if (!poseReady) {
+            console.error('❌ [VideoIngest] PoseService failed.');
+            return false;
+        }
+        
+        return true;
+
+    } catch (err) {
+        console.error('❌ [VideoIngest] Camera permission denied or error:', err);
+        return false;
     }
-    
-    return true;
   }
 
   startFrameLoop() {
@@ -52,6 +98,12 @@ class VideoIngestService {
     if (this.animationFrameId) {
       cancelAnimationFrame(this.animationFrameId);
       this.animationFrameId = null;
+    }
+
+    // Stop the camera stream to release the hardware light
+    if (this.stream) {
+        this.stream.getTracks().forEach(track => track.stop());
+        this.stream = null;
     }
   }
 
@@ -80,11 +132,10 @@ class VideoIngestService {
       // 2. Run AI Analysis
       const currentPhase = await analysisService.process(result);
       
-      // 3. Update HUD Store (The Critical Wiring)
+      // 3. Update HUD Store
       if (currentPhase) {
-          // Debug log to confirm AI is firing (Check console if HUD stays '---')
           if (overlay.phase !== currentPhase) {
-             console.log(`Update Phase: ${currentPhase}`); 
+             // console.log(`Update Phase: ${currentPhase}`); 
           }
           overlay.phase = currentPhase;
       }

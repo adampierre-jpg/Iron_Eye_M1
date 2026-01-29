@@ -1,10 +1,15 @@
 import * as ort from 'onnxruntime-web';
 import { viterbiDecoder, type SnatchPhase } from './viterbiDecoder';
 
+import { browser } from '$app/environment';
+
 // Point ONNX to the root (where we copied the .wasm and .mjs files)
-ort.env.wasm.wasmPaths = "/"; 
-ort.env.wasm.numThreads = 1;
-ort.env.wasm.simd = true;
+// SAFETY: Only configure if we are running in the browser.
+if (browser) {
+    ort.env.wasm.wasmPaths = "/"; 
+    ort.env.wasm.numThreads = 1;
+    ort.env.wasm.simd = true;
+}
 
 // --- UPDATED INTERFACE TO MATCH YOUR JSON ---
 interface Config {
