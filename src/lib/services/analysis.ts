@@ -1,15 +1,16 @@
 // src/lib/services/analysis.ts
 import { featureBuilder } from '$lib/engine/features';
 import { PhaseClassifier } from '$lib/engine/phaseClassifier'; 
-import { snatchSession } from '$lib/engine/snatchLogic'; // <--- NEW ENGINE
-import { overlay } from '$lib/stores'; // Direct store update for speed
+import { snatchSession } from '$lib/engine/snatchLogic';
+import { viterbiDecoder } from '$lib/engine/viterbiDecoder'; 
+import { overlay } from '$lib/stores'; 
 import type { PoseResult, SnatchPhase } from '$lib/types';
 import { browser } from '$app/environment';
 
 class AnalysisService {
   private classifier: PhaseClassifier;
   private isReady = false;
-
+  
   public currentPhase: SnatchPhase = 'STANDING';
 
   constructor() {
@@ -33,61 +34,67 @@ class AnalysisService {
     }
   }
 
-  /**
-   * Process a single frame.
-   */
   async process(pose: PoseResult): Promise<SnatchPhase> {
     if (!this.isReady || !pose) return 'STANDING';
 
-    // --------------------------------------------------------
-    // 1. INJECT SIDE CONTEXT
-    // --------------------------------------------------------
-    // Ask the Engine: "Do we have a locked side?"
+    // 1. INJECT SIDE CONTEXT (From Geometric Engine)
     const lockedSide = snatchSession.getActiveSide();
-    
-    // If YES, force the Pose object to carry that side.
-    // This ensures featureBuilder extracts limbs from the ACTIVE side.
     if (lockedSide) {
         pose.side = lockedSide;
     }
-    // If NO, we leave it null (defaulting to Right in featureBuilder),
-    // which is fine for detecting the initial 'HANDONBELL' posture.
 
-    // --------------------------------------------------------
-    // 2. EXTRACT FEATURES & CLASSIFY
-    // --------------------------------------------------------
-    const features = featureBuilder.extract(pose);
+    // 2. EXTRACT FEATURES
+    // Returns { vector, velocityMps } or null
+    const result = featureBuilder.extract(pose);
     
-    if (!features) return this.currentPhase; 
+    if (result) {
+        const { vector, velocityMps } = result;
 
-    this.classifier.addFrame(features);
-    const newPhase = await this.classifier.classify();
-    
-    if (newPhase) {
-      this.currentPhase = newPhase;
-    }
+        // --- OPTIMO TRAP: DEBUGGING THE HIKE ---
+        // If we are locked in 'HANDONBELL' but moving fast, log the vector.
+        // This helps verify if the inputs are within the model's expected range.
+        if (this.currentPhase === 'HANDONBELL' && Math.abs(vector[9]) > 0.5 && lockedSide) {
+             console.groupCollapsed('🦁 [Optimo Trap] Golden Frame Data');
+             console.log('Normalized Vector:', vector);
+             console.log('Wrist Norm Velocity (Feat 9):', vector[9]);
+             console.log('Real Velocity (m/s):', velocityMps);
+             console.groupEnd();
+        }
 
-    // --------------------------------------------------------
-    // 3. UPDATE ENGINE & STORES
-    // --------------------------------------------------------
-    // Pull velocity (feature index 9) to pass to the engine
-    const velocityMps = features[9] || 0;
+        // 3. CLASSIFY (Using Normalized Vector)
+        this.classifier.addFrame(vector);
+        const newPhase = await this.classifier.classify();
+        if (newPhase) {
+             this.currentPhase = newPhase;
+        }
 
-    // Run the Referee Logic
-    const sessionState = snatchSession.update(this.currentPhase, pose, velocityMps);
+        // 4. UPDATE ENGINE (Using Real-World Velocity)
+        const sessionState = snatchSession.update(this.currentPhase, pose, velocityMps);
 
-    // Sync to UI (Rune Store)
-    overlay.phase = this.currentPhase;
-    overlay.repCount = sessionState.repCount;
-    overlay.currentVelocity = sessionState.currentVelocity;
-    overlay.peakVelocity = sessionState.peakVelocity;
-    
-    // Confidence indicator
-    overlay.trackingConfidence = (pose.confidence > 0.6) ? 'high' : 'low';
-    
-    // Optional: Update alert banner if the Engine has feedback
-    if (sessionState.feedback && sessionState.feedback !== 'READY') {
-         // You can wire this to overlay.alert if you want text updates on screen
+        // 5. SYNC MODEL TO ENGINE (Viterbi Overrides)
+        const isLocked = sessionState.isSessionActive;
+        const repCount = sessionState.repCount;
+
+        // RULE: If Geometry is Locked but Reps=0, force HANDONBELL (Prevent Drift)
+        if (isLocked && repCount === 0) {
+            if (this.currentPhase === 'STANDING') {
+                 viterbiDecoder.forceState('HANDONBELL');
+                 this.currentPhase = 'HANDONBELL';
+            }
+        }
+
+        // RULE: If Session Unlock, Reset Viterbi
+        if (!snatchSession.getActiveSide() && this.currentPhase !== 'STANDING') {
+             viterbiDecoder.reset();
+             this.currentPhase = 'STANDING';
+        }
+
+        // 6. UI UPDATES
+        overlay.phase = this.currentPhase;
+        overlay.repCount = sessionState.repCount;
+        overlay.currentVelocity = sessionState.currentVelocity;
+        overlay.peakVelocity = sessionState.peakVelocity;
+        overlay.trackingConfidence = (pose.confidence > 0.6) ? 'high' : 'low';
     }
 
     return this.currentPhase;
@@ -96,6 +103,7 @@ class AnalysisService {
   reset() {
     this.currentPhase = 'STANDING';
     snatchSession.reset();
+    viterbiDecoder.reset();
     overlay.reset();
   }
 }

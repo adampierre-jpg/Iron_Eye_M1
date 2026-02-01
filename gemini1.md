@@ -1,7 +1,7 @@
-# Iron Eye — Project Context & Handoff
+# ONXX — Project Context & Handoff
 
 ## 1. Project Identity
-* **Name:** Iron Eye (Kettlebell Snatch Analysis)
+* **Name:** ONXX (Optimized Neuromuscular eXercise for 2X fibers)
 * **Objective:** Mobile-first, edge-to-edge web tool for analyzing kettlebell snatch mechanics (Phase, Velocity, Reps).
 * **Tech Stack:** SvelteKit (SPA Mode), Svelte 5 Runes, TypeScript, Tailwind.
 * **Core CV Stack:**
@@ -103,8 +103,36 @@
 
 ---
 
-## 6. Operational Protocols (Strict)
+## 7. Investigation Log: Feature Parity & Model Misalignment (2026-01-30)
 
-* **No Blind Patches:** Never generate code to fix or patch a file without first requesting and verifying the current content of that file.
-* **Rune-First:** All new state management must utilize Svelte 5 Runes.
-* **Calibration Verification:** Always verify velocity numbers via the `📏 [Calibration]` debug group in the console.
+**Incident:** Model fails to transition from `HANDONBELL` to `HIKE` during high-velocity movements in live/upload sessions.
+**Root Cause Identified:** **Feature Engineering Divergence** between Training Pipeline (Python) and Runtime Engine (TypeScript).
+
+### Factual Findings
+1.  **Training Data Source:** The model was trained on **Joint Angles** and **Angular Velocities**, not spatial coordinates.
+    * *Previous Assumption:* Model used spatial velocity (meters/sec or pixels/sec).
+    * *Correction:* Python `build_features` proves inputs are `angle_3pt` (degrees) and `compute_velocity` of those angles.
+2.  **Math Implementation Mismatch:**
+    * **Angles:** Python used Dot Product (`arccos`) for inner angles. TypeScript used `atan2` (directional angles).
+    * **Velocity Scaling:** Python applied specific hardcoded scalars (`/ 500.0` for angles, `* 10.0` for wrist position). TypeScript was sending raw values.
+    * **Wrist Input:** Python used raw normalized Y (`0.0 - 1.0`). TypeScript was calculating a shoulder-relative offset.
+3.  **Frame Rate:** The model was trained on **60fps** video data.
+    * *Correction:* Throttling inference to 30fps is incorrect. Runtime must match the 60fps native input of the training set.
+
+### Codebase Status (As of Session End)
+* **`src/lib/engine/features.ts`**: Refactored to strictly mirror the Python `build_features` logic.
+    * Now calculates 4 Joint Angles using `arccos`.
+    * Now calculates 4 Angular Velocities using finite difference scaled by `1/500`.
+    * Now calculates Wrist Velocity using `(currY - prevY) / dt * 10`.
+    * Maintains a separate "Real World" velocity calculation (`velocityMps`) for the UI, derived from Calibration (`pxPerMeter`).
+* **`src/lib/engine/viterbiDecoder.ts`**: logic updated to use **Softmax** normalization.
+    * Raw logits are converted to probabilities (0.0 - 1.0) before applying transition penalties, preventing arbitrary logit magnitudes from breaking the state machine.
+* **`src/lib/services/analysis.ts`**:
+    * Removed `AI_INTERVAL` throttling.
+    * Service runs at native video framerate (typically 60fps).
+* **`src/lib/engine/phaseClassifier.ts`**:
+    * Added `logMRI` method to inspect raw top-3 logits during debugging.
+
+### Pending Verification
+* Confirm if the specific scalar values (`/500`, `*10`) produce the expected distribution `[-1.0, 1.0]` with the current MediaPipe coordinate system.
+* Validate if `vWristY` polarity (positive vs negative) correctly aligns with the model's definition of "Down" (Hike). Python diff `(Next - Prev)` on Y-axis implies Positive Velocity = Downward Movement.

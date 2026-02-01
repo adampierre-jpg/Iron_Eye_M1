@@ -1,4 +1,4 @@
-# Iron Eye — Implementation Blueprint (Minimalist UI, Model-First)
+# ONXX — Implementation Blueprint (Optimized Neuromuscular eXercise)
 
 **Design rules**
 

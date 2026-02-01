@@ -1,17 +1,8 @@
 {
-  "model": {
-    "path": "/models/snatch_cnn_v4.onnx",
-    "input_shape": [1, 36, 12],
-    "output_shape": [1, 9],
-    "frame_window": 36,
-    "feature_dim": 12
-  },
-  "inference": {
-    "fps": 30,
-    "confidence_threshold": 0.6,
-    "smoothing_window": 5
-  },
-  "classes": [
+  "model_version": "colab-iron-smoothed",
+  "sequence_length": 30,
+  "num_features": 12,
+  "phases": [
     "STANDING",
     "HANDONBELL",
     "HIKE",
@@ -21,21 +12,5 @@
     "DROP",
     "CATCH",
     "PARK"
-  ],
-  "viterbi": {
-    "transition_penalty": -5.0,
-    "illegal_penalty": -1000.0,
-    "self_transition_bonus": 2.0,
-    "grammar": {
-      "STANDING": ["STANDING", "HANDONBELL"],
-      "HANDONBELL": ["HANDONBELL", "HIKE", "STANDING"],
-      "HIKE": ["HIKE", "PULL"],
-      "PULL": ["PULL", "FLOAT", "DROP"],
-      "FLOAT": ["FLOAT", "LOCKOUT", "DROP"],
-      "LOCKOUT": ["LOCKOUT", "DROP"],
-      "DROP": ["DROP", "CATCH", "STANDING"],
-      "CATCH": ["CATCH", "PULL", "PARK", "STANDING"],
-      "PARK": ["PARK", "STANDING"]
-    }
-  }
+  ]
 }
